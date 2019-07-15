@@ -36,11 +36,13 @@ private[spark] class Slf4jSink(
   val SLF4J_KEY_PERIOD = "period"
   val SLF4J_KEY_UNIT = "unit"
 
+  // 获取数据的时间周期
   val pollPeriod = Option(property.getProperty(SLF4J_KEY_PERIOD)) match {
     case Some(s) => s.toInt
     case None => SLF4J_DEFAULT_PERIOD
   }
 
+  // 获取数据的时间周期的单位
   val pollUnit: TimeUnit = Option(property.getProperty(SLF4J_KEY_UNIT)) match {
     case Some(s) => TimeUnit.valueOf(s.toUpperCase())
     case None => TimeUnit.valueOf(SLF4J_DEFAULT_UNIT)
@@ -48,20 +50,24 @@ private[spark] class Slf4jSink(
 
   MetricsSystem.checkMinimalPollingPeriod(pollUnit, pollPeriod)
 
+  // 实例化Slf4jReporter对象
   val reporter: Slf4jReporter = Slf4jReporter.forRegistry(registry)
     .convertDurationsTo(TimeUnit.MILLISECONDS)
     .convertRatesTo(TimeUnit.SECONDS)
     .build()
 
   override def start() {
+    // 调用Slf4jReporter的相关方法
     reporter.start(pollPeriod, pollUnit)
   }
 
   override def stop() {
+    // 调用Slf4jReporter的相关方法
     reporter.stop()
   }
 
   override def report() {
+    // 调用Slf4jReporter的相关方法
     reporter.report()
   }
 }
