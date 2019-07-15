@@ -108,18 +108,25 @@ private[spark] class EventLoggingListener(
      * Therefore, for local files, use FileOutputStream instead. */
     val dstream =
       if ((isDefaultLocal && uri.getScheme == null) || uri.getScheme == "file") {
+        // 写入本地文件路径
         new FileOutputStream(uri.getPath)
       } else {
+        // 写入Hadoop文件系统
         hadoopDataStream = Some(fileSystem.create(path))
         hadoopDataStream.get
       }
 
     try {
+      // 包装压缩器
       val cstream = compressionCodec.map(_.compressedOutputStream(dstream)).getOrElse(dstream)
+      // 包装为缓冲流
       val bstream = new BufferedOutputStream(cstream, outputBufferSize)
 
+      // 写入一些初始化信息
       EventLoggingListener.initEventLog(bstream)
+      // Hadoop文件系统设置770权限
       fileSystem.setPermission(path, LOG_FILE_PERMISSIONS)
+      // 构建写入器
       writer = Some(new PrintWriter(bstream))
       logInfo("Logging events to %s".format(logPath))
     } catch {
@@ -129,9 +136,14 @@ private[spark] class EventLoggingListener(
     }
   }
 
-  /** Log the event as JSON. */
+  /**
+    * Log the event as JSON.
+    * 用于将事件转换为Json字符串后写入日志文件。
+    **/
   private def logEvent(event: SparkListenerEvent, flushLogger: Boolean = false) {
+    // 事件转换为JSON
     val eventJson = JsonProtocol.sparkEventToJson(event)
+    // 写出并在flushLogger参数为true的情况下刷新到日志文件
     // scalastyle:off println
     writer.foreach(_.println(compact(render(eventJson))))
     // scalastyle:on println

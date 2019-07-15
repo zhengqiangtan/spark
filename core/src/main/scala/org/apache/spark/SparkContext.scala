@@ -257,6 +257,10 @@ class SparkContext(config: SparkConf) extends Logging {
   private var _eventLogger: Option[EventLoggingListener] = None
   /**
     * Executor动态分配管理器，可以根据工作负载动态调整Executor的数量。
+    * 内部会定时根据工作负载计算所需的Executor数量：
+    *   - 如果对Executor需求数量大于之前向集群管理器申请的Executor数量，那么向集群管理器申请添加Executor。
+    *   - 如果对Executor需求数量小于之前向集群管理器申请的Executor数量，那么向集群管理器申请取消部分Executor。
+    *   - ExecutorAllocationManager内部还会定时向集群管理器申请移除（“杀死”）过期的Executor。
     * 在配置spark.dynamicAllocation.enabled属性为true的前提下，
     * 在非local模式下或者当spark.dynamicAllocation.testing属性为true时启用。
     */
@@ -581,20 +585,28 @@ class SparkContext(config: SparkConf) extends Logging {
 
     // We need to register "HeartbeatReceiver" before "createTaskScheduler" because Executor will
     // retrieve "HeartbeatReceiver" in the constructor. (SPARK-6640)
+    // 创建心跳接收器，向RpcEnv的Dispatcher注册HeartbeatReceiver，并返回HeartbeatReceiver的NettyRpcEndpointRef引用。
     _heartbeatReceiver = env.rpcEnv.setupEndpoint(
       HeartbeatReceiver.ENDPOINT_NAME, new HeartbeatReceiver(this))
 
     // Create and start the scheduler
+    // 创建TaskScheduler，返回类型为(SchedulerBackend, TaskScheduler)
     val (sched, ts) = SparkContext.createTaskScheduler(this, master, deployMode)
     _schedulerBackend = sched
     _taskScheduler = ts
+    // 创建DAGScheduler
     _dagScheduler = new DAGScheduler(this)
+    /**
+      * 向HeartbeatReceiver发送TaskSchedulerIsSet消息，
+      * 表示SparkContext的_taskScheduler属性已经持有了TaskScheduler的引用
+      */
     _heartbeatReceiver.ask[Boolean](TaskSchedulerIsSet)
 
     // start TaskScheduler after taskScheduler sets DAGScheduler reference in DAGScheduler's
     // constructor
+    // 启动TaskScheduler，在启动的时候还会启动DAGScheduler
     _taskScheduler.start()
-
+    // 获取Application ID和Application Attempt ID
     _applicationId = _taskScheduler.applicationId()
     _applicationAttemptId = taskScheduler.applicationAttemptId()
     _conf.set("spark.app.id", _applicationId)
@@ -602,20 +614,27 @@ class SparkContext(config: SparkConf) extends Logging {
       System.setProperty("spark.ui.proxyBase", "/proxy/" + _applicationId)
     }
     _ui.foreach(_.setAppId(_applicationId))
+
+    // 初始化块管理器
     _env.blockManager.initialize(_applicationId)
 
     // The metrics system for Driver need to be set spark.app.id to app ID.
     // So it should start after we get app ID from the task scheduler and set spark.app.id.
+    // 启动度量系统，MetricsSystem对Source和Sink进行封装，将Source的数据输出到不同的Sink
     _env.metricsSystem.start()
     // Attach the driver metrics servlet handler to the web ui after the metrics system is started.
     _env.metricsSystem.getServletHandlers.foreach(handler => ui.foreach(_.attachHandler(handler)))
 
+    // 创建事件日志监听器
     _eventLogger =
       if (isEventLogEnabled) {
         val logger =
+          // 将事件持久化到存储的监听器
           new EventLoggingListener(_applicationId, _applicationAttemptId, _eventLogDir.get,
             _conf, _hadoopConfiguration)
+        // 启动监听器
         logger.start()
+        // 添加到事件总线中
         listenerBus.addListener(logger)
         Some(logger)
       } else {
@@ -623,11 +642,19 @@ class SparkContext(config: SparkConf) extends Logging {
       }
 
     // Optionally scale number of executors dynamically based on workload. Exposed for testing.
+    /**
+      * 配置spark.dynamicAllocation.enabled属性为true的前提下，
+      * 在非Local模式下或者当spark.dynamicAllocation.testing属性为true时启用ExecutorAllocationManager。
+      */
     val dynamicAllocationEnabled = Utils.isDynamicAllocationEnabled(_conf)
+    // 创建ExecutorAllocationManager
     _executorAllocationManager =
       if (dynamicAllocationEnabled) {
         schedulerBackend match {
+          // 在SchedulerBackend的实现类同时实现了特质ExecutorAllocationClient的情况下才创建
+          // 只有CoarseGrainedSchedulerBackend
           case b: ExecutorAllocationClient =>
+            // 创建时会包装schedulerBackend
             Some(new ExecutorAllocationManager(
               schedulerBackend.asInstanceOf[ExecutorAllocationClient], listenerBus, _conf))
           case _ =>
@@ -636,6 +663,7 @@ class SparkContext(config: SparkConf) extends Logging {
       } else {
         None
       }
+    // 启动ExecutorAllocationManager
     _executorAllocationManager.foreach(_.start())
 
     _cleaner =
@@ -2567,6 +2595,7 @@ object SparkContext extends Logging {
   /**
    * Create a task scheduler based on a given master URL.
    * Return a 2-tuple of the scheduler backend and the task scheduler.
+    * 创建TaskScheduler和SchedulerBackend
    */
   private def createTaskScheduler(
       sc: SparkContext,
@@ -2577,13 +2606,16 @@ object SparkContext extends Logging {
     // When running locally, don't try to re-execute tasks on failure.
     val MAX_LOCAL_TASK_FAILURES = 1
 
+    // 根据不同的Deploy模式来创建
     master match {
+      // Local模式，TaskSchedulerImpl和LocalSchedulerBackend
       case "local" =>
         val scheduler = new TaskSchedulerImpl(sc, MAX_LOCAL_TASK_FAILURES, isLocal = true)
         val backend = new LocalSchedulerBackend(sc.getConf, scheduler, 1)
         scheduler.initialize(backend)
         (backend, scheduler)
 
+      // local[N]，TaskSchedulerImpl和LocalSchedulerBackend
       case LOCAL_N_REGEX(threads) =>
         def localCpuCount: Int = Runtime.getRuntime.availableProcessors()
         // local[*] estimates the number of cores on the machine; local[N] uses exactly N threads.
@@ -2596,6 +2628,7 @@ object SparkContext extends Logging {
         scheduler.initialize(backend)
         (backend, scheduler)
 
+      // local[N, maxRetries]，TaskSchedulerImpl和LocalSchedulerBackend
       case LOCAL_N_FAILURES_REGEX(threads, maxFailures) =>
         def localCpuCount: Int = Runtime.getRuntime.availableProcessors()
         // local[*, M] means the number of cores on the computer with M failures
@@ -2606,6 +2639,7 @@ object SparkContext extends Logging {
         scheduler.initialize(backend)
         (backend, scheduler)
 
+      // spark://(.*)，TaskSchedulerImpl和StandaloneSchedulerBackend
       case SPARK_REGEX(sparkUrl) =>
         val scheduler = new TaskSchedulerImpl(sc)
         val masterUrls = sparkUrl.split(",").map("spark://" + _)
@@ -2613,6 +2647,7 @@ object SparkContext extends Logging {
         scheduler.initialize(backend)
         (backend, scheduler)
 
+      // local_cluster[N, cores, memory]，TaskSchedulerImpl和StandaloneSchedulerBackend
       case LOCAL_CLUSTER_REGEX(numSlaves, coresPerSlave, memoryPerSlave) =>
         // Check to make sure memory requested <= memoryPerSlave. Otherwise Spark will just hang.
         val memoryPerSlaveInt = memoryPerSlave.toInt
@@ -2633,12 +2668,22 @@ object SparkContext extends Logging {
         }
         (backend, scheduler)
 
+      // External Cluster Manager：YARN或Mesos
       case masterUrl =>
         val cm = getClusterManager(masterUrl) match {
           case Some(clusterMgr) => clusterMgr
           case None => throw new SparkException("Could not parse Master URL: '" + master + "'")
         }
         try {
+          /**
+            * 根据不同的Cluster Manager来创建不同的TaskScheduler和SchedulerBackend
+            * YARN：
+            *   - Cluster：YarnClusterScheduler和YarnClusterSchedulerBackend
+            *   - Client：YarnScheduler和YarnClientSchedulerBackend
+            * Mesos：
+            *   - Coarse（粗粒度）：TaskSchedulerImpl和MesosCoarseGrainedSchedulerBackend
+            *   - Fine（细粒度）：TaskSchedulerImpl和MesosFineGrainedSchedulerBackend
+            */
           val scheduler = cm.createTaskScheduler(sc, masterUrl)
           val backend = cm.createSchedulerBackend(sc, masterUrl, scheduler)
           cm.initialize(scheduler, backend)
