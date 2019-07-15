@@ -54,6 +54,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   /** Create a SparkConf that loads defaults from system properties and the classpath */
   def this() = this(true)
 
+  // 用于存放配置的Map
   private val settings = new ConcurrentHashMap[String, String]()
 
   @transient private lazy val reader: ConfigReader = {
@@ -64,33 +65,41 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     _reader
   }
 
+  // 当该参数为true时，会从系统属性中加载Spark的配置
   if (loadDefaults) {
     loadFromSystemProperties(false)
   }
 
   private[spark] def loadFromSystemProperties(silent: Boolean): SparkConf = {
     // Load any spark.* system properties
+    // 获取系统跟属性并加载以spark.开头的
     for ((key, value) <- Utils.getSystemProperties if key.startsWith("spark.")) {
       set(key, value, silent)
     }
     this
   }
 
-  /** Set a configuration variable. */
+  /**
+    * Set a configuration variable.
+    * 设置配置项
+    **/
   def set(key: String, value: String): SparkConf = {
     set(key, value, false)
   }
 
   private[spark] def set(key: String, value: String, silent: Boolean): SparkConf = {
+    // 校验参数
     if (key == null) {
       throw new NullPointerException("null key")
     }
     if (value == null) {
       throw new NullPointerException("null value for " + key)
     }
+    // 如果不是静默添加，设置丢弃的配置会打印提示
     if (!silent) {
       logDeprecationWarning(key)
     }
+    // 设置到settings中
     settings.put(key, value)
     this
   }
@@ -426,7 +435,10 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
 
   private[spark] def contains(entry: ConfigEntry[_]): Boolean = contains(entry.key)
 
-  /** Copy this object */
+  /**
+    * Copy this object
+    * clone()方法会克隆一个新的SparkConf，方便开发者根据当前配置克隆一份新配置
+    **/
   override def clone: SparkConf = {
     val cloned = new SparkConf(false)
     settings.entrySet().asScala.foreach { e =>
@@ -751,6 +763,7 @@ private[spark] object SparkConf extends Logging {
    * Logs a warning message if the given config key is deprecated.
    */
   def logDeprecationWarning(key: String): Unit = {
+    // deprecatedConfigs中存储了丢弃的属性
     deprecatedConfigs.get(key).foreach { cfg =>
       logWarning(
         s"The configuration key '$key' has been deprecated as of Spark ${cfg.version} and " +
