@@ -29,6 +29,7 @@ import io.netty.buffer.ByteBufInputStream;
  * A {@link ManagedBuffer} backed by a Netty {@link ByteBuf}.
  */
 public class NettyManagedBuffer extends ManagedBuffer {
+  // Netty的ByteBuf
   private final ByteBuf buf;
 
   public NettyManagedBuffer(ByteBuf buf) {
@@ -37,16 +38,19 @@ public class NettyManagedBuffer extends ManagedBuffer {
 
   @Override
   public long size() {
+    // Netty的相关方法
     return buf.readableBytes();
   }
 
   @Override
   public ByteBuffer nioByteBuffer() throws IOException {
+    // Netty的相关方法
     return buf.nioBuffer();
   }
 
   @Override
   public InputStream createInputStream() throws IOException {
+    // 转换为ByteBufInputStream
     return new ByteBufInputStream(buf);
   }
 
@@ -64,6 +68,7 @@ public class NettyManagedBuffer extends ManagedBuffer {
 
   @Override
   public Object convertToNetty() throws IOException {
+    // 创建一份副本
     return buf.duplicate().retain();
   }
 

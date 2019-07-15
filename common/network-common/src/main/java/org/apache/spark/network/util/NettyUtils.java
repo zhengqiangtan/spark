@@ -70,6 +70,7 @@ public class NettyUtils {
 
   /** Returns the correct ServerSocketChannel class based on IOMode. */
   public static Class<? extends ServerChannel> getServerChannelClass(IOMode mode) {
+    // 根据IO Mode创建对应的Channel
     switch (mode) {
       case NIO:
         return NioServerSocketChannel.class;

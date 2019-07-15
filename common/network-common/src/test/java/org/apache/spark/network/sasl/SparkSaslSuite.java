@@ -455,6 +455,7 @@ public class SparkSaslSuite {
 
     @Override
     public RpcHandler doBootstrap(Channel channel, RpcHandler rpcHandler) {
+      // 将自己加入到Netty的Pipeline中实现引导
       channel.pipeline().addFirst("encryptionChecker", this);
       return rpcHandler;
     }
@@ -465,6 +466,7 @@ public class SparkSaslSuite {
 
     @Override
     public void doBootstrap(TransportClient client, Channel channel) {
+      // 移除客户端管道中的SASL加密
       channel.pipeline().remove(SaslEncryption.ENCRYPTION_HANDLER_NAME);
     }
 

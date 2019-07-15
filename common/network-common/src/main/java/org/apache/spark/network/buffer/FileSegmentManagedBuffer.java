@@ -37,9 +37,13 @@ import org.apache.spark.network.util.TransportConf;
  * A {@link ManagedBuffer} backed by a segment in a file.
  */
 public final class FileSegmentManagedBuffer extends ManagedBuffer {
+  // TransportConf配置对象
   private final TransportConf conf;
+  // 所需要读取的文件
   private final File file;
+  // 所要读取文件的偏移量
   private final long offset;
+  // 所要读取文件的长度
   private final long length;
 
   public FileSegmentManagedBuffer(TransportConf conf, File file, long offset, long length) {
@@ -54,25 +58,33 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     return length;
   }
 
+  // 以NIO ByteBuffer方式读取
   @Override
   public ByteBuffer nioByteBuffer() throws IOException {
     FileChannel channel = null;
     try {
+      // 构造RAF并得到其FileChannel
       channel = new RandomAccessFile(file, "r").getChannel();
       // Just copy the buffer if it's sufficiently small, as memory mapping has a high overhead.
-      if (length < conf.memoryMapBytes()) {
+      // 判断读取长度是否小于spark.storage.memoryMapThreshold参数指定的长度
+      if (length < conf.memoryMapBytes()) { // 由spark.storage.memoryMapThreshold配置参数决定
+        // 分配对应大小的ByteBuffer
         ByteBuffer buf = ByteBuffer.allocate((int) length);
+        // 定位到偏移量
         channel.position(offset);
+        // 进行读取
         while (buf.remaining() != 0) {
-          if (channel.read(buf) == -1) {
+          if (channel.read(buf) == -1) { // 读取到-1说明读完了
             throw new IOException(String.format("Reached EOF before filling buffer\n" +
               "offset=%s\nfile=%s\nbuf.remaining=%s",
               offset, file.getAbsoluteFile(), buf.remaining()));
           }
         }
+        // 切换buffer为写模式并返回
         buf.flip();
         return buf;
       } else {
+        // 否则返回对应的MappedByteBuffer映射缓冲对象，并没有实际的读取
         return channel.map(FileChannel.MapMode.READ_ONLY, offset, length);
       }
     } catch (IOException e) {
@@ -91,12 +103,16 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     }
   }
 
+  // 以文件流方式读取
   @Override
   public InputStream createInputStream() throws IOException {
     FileInputStream is = null;
     try {
+      // 根据文件创建FileInputStream
       is = new FileInputStream(file);
+      // 定位到偏移量
       ByteStreams.skipFully(is, offset);
+      // 返回LimitedInputStream流对象
       return new LimitedInputStream(is, length);
     } catch (IOException e) {
       try {
@@ -129,10 +145,12 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
 
   @Override
   public Object convertToNetty() throws IOException {
-    if (conf.lazyFileDescriptor()) {
+    if (conf.lazyFileDescriptor()) { // 以懒加载的方式初始化FileDescriptor
+      // 传入的是File对象，并没有打开文件
       return new DefaultFileRegion(file, offset, length);
-    } else {
+    } else { // 不以懒加载的方式初始化FileDescriptor
       FileChannel fileChannel = new FileInputStream(file).getChannel();
+      // 传入的是FileChannel对象，此时文件已经被打开了
       return new DefaultFileRegion(fileChannel, offset, length);
     }
   }

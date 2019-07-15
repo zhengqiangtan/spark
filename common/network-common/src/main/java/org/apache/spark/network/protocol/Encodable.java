@@ -28,14 +28,20 @@ import io.netty.buffer.ByteBuf;
  * just copying data from it), then you must retain() the ByteBuf.
  *
  * Additionally, when adding a new Encodable Message, add it to {@link Message.Type}.
+ *
+ * 实现该接口的类可以转换到一个ByteBuf中
  */
 public interface Encodable {
-  /** Number of bytes of the encoded form of this object. */
+  /**
+   * Number of bytes of the encoded form of this object.
+   * 编码的字节数长度
+   **/
   int encodedLength();
 
   /**
    * Serializes this object by writing into the given ByteBuf.
    * This method must write exactly encodedLength() bytes.
+   * 编码方法，会将当前对象存入到buf中
    */
   void encode(ByteBuf buf);
 }

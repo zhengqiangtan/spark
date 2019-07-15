@@ -27,6 +27,8 @@ import org.apache.spark.network.client.TransportClient;
 
 /**
  * Handler for sendRPC() messages sent by {@link org.apache.spark.network.client.TransportClient}s.
+ * 对调用传输客户端（TransportClient）的sendRPC方法发送的消息进行处理的程序。
+ * 定义了RPC处理器的规范。
  */
 public abstract class RpcHandler {
 
@@ -38,11 +40,13 @@ public abstract class RpcHandler {
    *
    * This method will not be called in parallel for a single TransportClient (i.e., channel).
    *
+   * 用来接收单一的RPC消息，具体处理逻辑需要子类去实现。
+   *
    * @param client A channel client which enables the handler to make requests back to the sender
    *               of this RPC. This will always be the exact same object for a particular channel.
    * @param message The serialized bytes of the RPC.
    * @param callback Callback which should be invoked exactly once upon success or failure of the
-   *                 RPC.
+   *                 RPC. 用于对请求处理结束后进行回调，无论处理结果是成功还是失败，该回调都会被调用一次
    */
   public abstract void receive(
       TransportClient client,
@@ -52,6 +56,8 @@ public abstract class RpcHandler {
   /**
    * Returns the StreamManager which contains the state about which streams are currently being
    * fetched by a TransportClient.
+   * 获取StreamManager，StreamManager可以从流中获取单个的块，
+   * 因此它也包含着当前正在被TransportClient获取的流的状态。
    */
   public abstract StreamManager getStreamManager();
 
@@ -65,20 +71,24 @@ public abstract class RpcHandler {
    * @param message The serialized bytes of the RPC.
    */
   public void receive(TransportClient client, ByteBuffer message) {
+    // 默认传入的callback是ONE_WAY_CALLBACK，它的回调方法只打印了一些日志，没有其他操作
     receive(client, message, ONE_WAY_CALLBACK);
   }
 
   /**
    * Invoked when the channel associated with the given client is active.
+   * 当与给定客户端相关联的Channel处于活动状态时调用
    */
   public void channelActive(TransportClient client) { }
 
   /**
    * Invoked when the channel associated with the given client is inactive.
    * No further requests will come from this client.
+   * 当与给定客户端相关联的Channel处于非活动状态时调用
    */
   public void channelInactive(TransportClient client) { }
 
+  // 当Channel产生异常时调用
   public void exceptionCaught(Throwable cause, TransportClient client) { }
 
   private static class OneWayRpcCallback implements RpcResponseCallback {

@@ -40,11 +40,14 @@ object SparkTransportConf {
 
   /**
    * Utility for creating a [[TransportConf]] from a [[SparkConf]].
-   * @param _conf the [[SparkConf]]
-   * @param module the module name
+    *
+    * 可用于构造TransportConf配置对象
+   * @param _conf the [[SparkConf]] SparkConf
+   * @param module the module name 模块名
    * @param numUsableCores if nonzero, this will restrict the server and client threads to only
    *                       use the given number of cores, rather than all of the machine's cores.
-   *                       This restriction will only occur if these properties are not already set.
+   *                       This restriction will only occur if these properties are not already set
+    *                       可用内核数
    */
   def fromSparkConf(_conf: SparkConf, module: String, numUsableCores: Int = 0): TransportConf = {
     val conf = _conf.clone
@@ -53,10 +56,12 @@ object SparkTransportConf {
     // assuming we have all the machine's cores).
     // NB: Only set if serverThreads/clientThreads not already set.
     val numThreads = defaultNumThreads(numUsableCores)
+    // 服务端传输线程数
     conf.setIfMissing(s"spark.$module.io.serverThreads", numThreads.toString)
+    // 设置客户端传输线程数
     conf.setIfMissing(s"spark.$module.io.clientThreads", numThreads.toString)
 
-    new TransportConf(module, new ConfigProvider {
+    new TransportConf(module, new ConfigProvider { // 传递了ConfigProvider对象
       override def get(name: String): String = conf.get(name)
     })
   }
@@ -66,8 +71,10 @@ object SparkTransportConf {
    * If numUsableCores is 0, we will use Runtime get an approximate number of available cores.
    */
   private def defaultNumThreads(numUsableCores: Int): Int = {
+    // 如果传入的numUsableCores大于0时则取numUsableCores，否则是下系统可用处理器的数量
     val availableCores =
       if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
+    // 会在二者中取最小值，即限制为8个
     math.min(availableCores, MAX_DEFAULT_NETTY_THREADS)
   }
 }

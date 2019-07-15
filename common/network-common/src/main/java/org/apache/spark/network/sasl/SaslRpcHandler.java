@@ -70,25 +70,34 @@ class SaslRpcHandler extends RpcHandler {
     this.delegate = delegate;
     this.secretKeyHolder = secretKeyHolder;
     this.saslServer = null;
+
+    // 是否已经完成了SASL认证交换
     this.isComplete = false;
   }
 
   @Override
   public void receive(TransportClient client, ByteBuffer message, RpcResponseCallback callback) {
-    if (isComplete) {
+    if (isComplete) { // 已经完成了SASL认证交换
       // Authentication complete, delegate to base handler.
+      // 将消息传递给SaslRpcHandler所代理的下游RpcHandler并返回
       delegate.receive(client, message, callback);
       return;
     }
 
+    // 将ByteBuffer转换为Netty的ByteBuf
     ByteBuf nettyBuf = Unpooled.wrappedBuffer(message);
+
+    // 用于记录SASL解密后的消息
     SaslMessage saslMessage;
     try {
+      // 对客户端发送的消息进行SASL解密
       saslMessage = SaslMessage.decode(nettyBuf);
     } finally {
+      // 释放
       nettyBuf.release();
     }
 
+    // 如果saslServer未创建，则需要创建SparkSaslServer
     if (saslServer == null) {
       // First message in the handshake, setup the necessary state.
       client.setClientId(saslMessage.appId);
@@ -98,11 +107,13 @@ class SaslRpcHandler extends RpcHandler {
 
     byte[] response;
     try {
+      // 使用SparkSaslServer处理已解密的消息
       response = saslServer.response(JavaUtils.bufferToArray(
         saslMessage.body().nioByteBuffer()));
     } catch (IOException ioe) {
       throw new RuntimeException(ioe);
     }
+    // 处理成功，调用回调的onSuccess()方法
     callback.onSuccess(ByteBuffer.wrap(response));
 
     // Setup encryption after the SASL response is sent, otherwise the client can't parse the
@@ -112,9 +123,11 @@ class SaslRpcHandler extends RpcHandler {
     // messages are being written to the channel while negotiation is still going on.
     if (saslServer.isComplete()) {
       logger.debug("SASL authentication successful for channel {}", client);
+      // SASL认证交换已经完成，置isComplete标记为true
       isComplete = true;
       if (SparkSaslServer.QOP_AUTH_CONF.equals(saslServer.getNegotiatedProperty(Sasl.QOP))) {
         logger.debug("Enabling encryption for channel {}", client);
+        // 对管道进行SASL加密
         SaslEncryption.addToChannel(channel, saslServer, conf.maxSaslEncryptedBlockSize());
         saslServer = null;
       } else {

@@ -54,6 +54,9 @@ import org.apache.spark.network.util.TransportFrameDecoder;
  * The TransportServer and TransportClientFactory both create a TransportChannelHandler for each
  * channel. As each TransportChannelHandler contains a TransportClient, this enables server
  * processes to send messages back to the client on an existing channel.
+ *
+ * 传输上下文，包含了用于创建传输服务端（TransportServer）和传输客户端工厂（TransportClientFactory）的上下文信息，
+ * 并支持使用TransportChannelHandler设置Netty提供的SocketChannel的Pipeline的实现。
  */
 public class TransportContext {
   private static final Logger logger = LoggerFactory.getLogger(TransportContext.class);
@@ -84,6 +87,11 @@ public class TransportContext {
    * Initializes a ClientFactory which runs the given TransportClientBootstraps prior to returning
    * a new Client. Bootstraps will be executed synchronously, and must run successfully in order
    * to create a Client.
+   *
+   * 创建TransportClientFactory工厂类
+   *
+   * @param bootstraps 客户端引导程序TransportClientBootstrap的列表
+   * @return
    */
   public TransportClientFactory createClientFactory(List<TransportClientBootstrap> bootstraps) {
     return new TransportClientFactory(this, bootstraps);
@@ -93,18 +101,26 @@ public class TransportContext {
     return createClientFactory(Lists.<TransportClientBootstrap>newArrayList());
   }
 
-  /** Create a server which will attempt to bind to a specific port. */
+  /**
+   * Create a server which will attempt to bind to a specific port.
+   * 构造传输服务端TransportServer的实例，绑定到特定端口
+   * */
   public TransportServer createServer(int port, List<TransportServerBootstrap> bootstraps) {
     return new TransportServer(this, null, port, rpcHandler, bootstraps);
   }
 
-  /** Create a server which will attempt to bind to a specific host and port. */
+  /** Create a server which will attempt to bind to a specific host and port.
+   * 构造传输服务端TransportServer的实例，绑定到特定主机名和端口
+   **/
   public TransportServer createServer(
       String host, int port, List<TransportServerBootstrap> bootstraps) {
     return new TransportServer(this, host, port, rpcHandler, bootstraps);
   }
 
-  /** Creates a new server, binding to any available ephemeral port. */
+  /**
+   * Creates a new server, binding to any available ephemeral port.
+   * 构造传输服务端TransportServer的实例，绑定到任意可用的临时端口
+   **/
   public TransportServer createServer(List<TransportServerBootstrap> bootstraps) {
     return createServer(0, bootstraps);
   }
@@ -133,15 +149,17 @@ public class TransportContext {
       SocketChannel channel,
       RpcHandler channelRpcHandler) {
     try {
+      // 创建TransportChannelHandler，InboundHandler
       TransportChannelHandler channelHandler = createChannelHandler(channel, channelRpcHandler);
+      // 添加Handler
       channel.pipeline()
-        .addLast("encoder", encoder)
-        .addLast(TransportFrameDecoder.HANDLER_NAME, NettyUtils.createFrameDecoder())
-        .addLast("decoder", decoder)
-        .addLast("idleStateHandler", new IdleStateHandler(0, 0, conf.connectionTimeoutMs() / 1000))
+        .addLast("encoder", encoder) // 消息编码，MessageEncoder，OutboundHandler
+        .addLast(TransportFrameDecoder.HANDLER_NAME, NettyUtils.createFrameDecoder()) // InboundHandler
+        .addLast("decoder", decoder) // 消息解码，MessageDecoder，InboundHandler
+        .addLast("idleStateHandler", new IdleStateHandler(0, 0, conf.connectionTimeoutMs() / 1000)) // 心跳检测，OutboundHandler，ChannelInboundHandler
         // NOTE: Chunks are currently guaranteed to be returned in the order of request, but this
         // would require more logic to guarantee if this were not part of the same event loop.
-        .addLast("handler", channelHandler);
+        .addLast("handler", channelHandler); // InboundHandler
       return channelHandler;
     } catch (RuntimeException e) {
       logger.error("Error while initializing Netty pipeline", e);
@@ -153,6 +171,9 @@ public class TransportContext {
    * Creates the server- and client-side handler which is used to handle both RequestMessages and
    * ResponseMessages. The channel is expected to have been successfully created, though certain
    * properties (such as the remoteAddress()) may not be available yet.
+   *
+   * TransportChannelHandler在服务端将代理Transport-RequestHandler对请求消息进行处理，
+   * 并在客户端代理TransportResponseHandler对响应消息进行处理。
    */
   private TransportChannelHandler createChannelHandler(Channel channel, RpcHandler rpcHandler) {
     TransportResponseHandler responseHandler = new TransportResponseHandler(channel);

@@ -70,6 +70,11 @@ import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
  * responsible for handling responses from the server.
  *
  * Concurrency: thread safe and can be called from multiple threads.
+ *
+ * RPC框架的客户端，用于获取预先协商好的流中的连续块。
+ * TransportClient旨在允许有效传输大量数据，这些数据将被拆分成几百KB到几MB的块。
+ * 当TransportClient处理从流中获取的块时，实际的设置是在传输层之外完成的。
+ * sendRPC方法能够在客户端和服务端的同一水平线的通信进行这些设置。
  */
 public class TransportClient implements Closeable {
   private static final Logger logger = LoggerFactory.getLogger(TransportClient.class);
@@ -126,38 +131,46 @@ public class TransportClient implements Closeable {
    * to be returned in the same order that they were requested, assuming only a single
    * TransportClient is used to fetch the chunks.
    *
+   * 从远端协商好的流中请求单个块
+   *
    * @param streamId Identifier that refers to a stream in the remote StreamManager. This should
    *                 be agreed upon by client and server beforehand.
    * @param chunkIndex 0-based index of the chunk to fetch
    * @param callback Callback invoked upon successful receipt of chunk, or upon any failure.
    */
   public void fetchChunk(
-      long streamId,
-      final int chunkIndex,
-      final ChunkReceivedCallback callback) {
+      long streamId, // 流ID
+      final int chunkIndex, // 块索引
+      final ChunkReceivedCallback callback) { // 响应回调处理器
     final long startTime = System.currentTimeMillis();
     if (logger.isDebugEnabled()) {
       logger.debug("Sending fetch chunk request {} to {}", chunkIndex, getRemoteAddress(channel));
     }
 
+    // 根据流ID和chunckIndex创建StreamChunkId对象
     final StreamChunkId streamChunkId = new StreamChunkId(streamId, chunkIndex);
+    // 添加streamChunkId和ChunkReceivedCallback的引用关系
     handler.addFetchRequest(streamChunkId, callback);
 
+    // 发送ChunkFetchRequest请求
     channel.writeAndFlush(new ChunkFetchRequest(streamChunkId)).addListener(
-      new ChannelFutureListener() {
+      new ChannelFutureListener() { // 添加了汇报发送情况的回调监听器
         @Override
         public void operationComplete(ChannelFuture future) throws Exception {
-          if (future.isSuccess()) {
+          if (future.isSuccess()) { // 发送成功
             long timeTaken = System.currentTimeMillis() - startTime;
             if (logger.isTraceEnabled()) {
               logger.trace("Sending request {} to {} took {} ms", streamChunkId,
                 getRemoteAddress(channel), timeTaken);
             }
           } else {
+            // 发送失败
             String errorMsg = String.format("Failed to send request %s to %s: %s", streamChunkId,
               getRemoteAddress(channel), future.cause());
             logger.error(errorMsg, future.cause());
+            // 从TransportResponseHandler中移除对应的ChunkReceivedCallback回调
             handler.removeFetchRequest(streamChunkId);
+            // 关闭Channel
             channel.close();
             try {
               callback.onFailure(chunkIndex, new IOException(errorMsg, future.cause()));
@@ -171,6 +184,7 @@ public class TransportClient implements Closeable {
 
   /**
    * Request to stream the data with the given stream ID from the remote end.
+   * 使用流ID，从远端获取数据
    *
    * @param streamId The stream to fetch.
    * @param callback Object to call with the stream data.
@@ -216,34 +230,44 @@ public class TransportClient implements Closeable {
    * Sends an opaque message to the RpcHandler on the server-side. The callback will be invoked
    * with the server's response or upon any failure.
    *
+   * 向服务端发送RPC请求，通过At least Once Delivery原则保证请求不会丢失
+   *
    * @param message The message to send.
    * @param callback Callback to handle the RPC's reply.
    * @return The RPC's id.
    */
-  public long sendRpc(ByteBuffer message, final RpcResponseCallback callback) {
+  public long sendRpc(ByteBuffer message, // 消息
+                      final RpcResponseCallback callback) { // 响应回调处理器
     final long startTime = System.currentTimeMillis();
     if (logger.isTraceEnabled()) {
       logger.trace("Sending RPC to {}", getRemoteAddress(channel));
     }
 
+    // 使用UUID生产请求主键
     final long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+    // 添加requestId和RpcResponseCallback的引用关系
     handler.addRpcRequest(requestId, callback);
 
+    // 发送RPC请求
     channel.writeAndFlush(new RpcRequest(requestId, new NioManagedBuffer(message))).addListener(
-      new ChannelFutureListener() {
+      new ChannelFutureListener() { // 添加了汇报发送情况的回调监听器
+        // 发送成功会调用更该方法
         @Override
         public void operationComplete(ChannelFuture future) throws Exception {
-          if (future.isSuccess()) {
+          if (future.isSuccess()) { // 发送成功
+            // 记录日志
             long timeTaken = System.currentTimeMillis() - startTime;
             if (logger.isTraceEnabled()) {
               logger.trace("Sending request {} to {} took {} ms", requestId,
                 getRemoteAddress(channel), timeTaken);
             }
-          } else {
+          } else { // 发送失败
             String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
               getRemoteAddress(channel), future.cause());
             logger.error(errorMsg, future.cause());
+            // 从TransportResponseHandler中移除Request ID对应的RpcResponseCallback
             handler.removeRpcRequest(requestId);
+            // 关闭Channel
             channel.close();
             try {
               callback.onFailure(new IOException(errorMsg, future.cause()));
@@ -260,6 +284,8 @@ public class TransportClient implements Closeable {
   /**
    * Synchronously sends an opaque message to the RpcHandler on the server-side, waiting for up to
    * a specified timeout for a response.
+   *
+   * 向服务器发送同步的RPC请求，并根据指定的超时时间等待响应
    */
   public ByteBuffer sendRpcSync(ByteBuffer message, long timeoutMs) {
     final SettableFuture<ByteBuffer> result = SettableFuture.create();
@@ -292,6 +318,8 @@ public class TransportClient implements Closeable {
   /**
    * Sends an opaque message to the RpcHandler on the server-side. No reply is expected for the
    * message, and no delivery guarantees are made.
+   *
+   * 向服务端发送RPC的请求，但不期望能获取响应，因而不能保证投递的可靠性
    *
    * @param message The message to send.
    */

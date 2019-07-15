@@ -29,6 +29,8 @@ import io.netty.buffer.Unpooled;
  * A {@link ManagedBuffer} backed by {@link ByteBuffer}.
  */
 public class NioManagedBuffer extends ManagedBuffer {
+
+  // JDK NIO的ByteBuffer
   private final ByteBuffer buf;
 
   public NioManagedBuffer(ByteBuffer buf) {
@@ -42,26 +44,31 @@ public class NioManagedBuffer extends ManagedBuffer {
 
   @Override
   public ByteBuffer nioByteBuffer() throws IOException {
+    // 返回一个副本
     return buf.duplicate();
   }
 
   @Override
   public InputStream createInputStream() throws IOException {
+    // 使用了Netty的Unpooled相关方法包装，然后返回ByteBufInputStream对象
     return new ByteBufInputStream(Unpooled.wrappedBuffer(buf));
   }
 
   @Override
   public ManagedBuffer retain() {
+    // 无操作
     return this;
   }
 
   @Override
   public ManagedBuffer release() {
+    // 无操作
     return this;
   }
 
   @Override
   public Object convertToNetty() throws IOException {
+    // 使用Netty的Unpooled相关方法包装
     return Unpooled.wrappedBuffer(buf);
   }
 

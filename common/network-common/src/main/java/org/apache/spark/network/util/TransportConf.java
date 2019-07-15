@@ -21,6 +21,7 @@ import com.google.common.primitives.Ints;
 
 /**
  * A central location that tracks all the settings we expose to users.
+ * 用于记录传输上下文TransportContext对象的配置信息
  */
 public class TransportConf {
 
@@ -43,8 +44,9 @@ public class TransportConf {
   private final String SPARK_NETWORK_IO_RETRYWAIT_KEY;
   private final String SPARK_NETWORK_IO_LAZYFD_KEY;
 
+  // 真正的配置提供者
   private final ConfigProvider conf;
-
+  // 配置的模块名称
   private final String module;
 
   public TransportConf(String module, ConfigProvider conf) {
@@ -83,8 +85,10 @@ public class TransportConf {
 
   /** Connect timeout in milliseconds. Default 120 secs. */
   public int connectionTimeoutMs() {
+    // 默认为120s
     long defaultNetworkTimeoutS = JavaUtils.timeStringAsSec(
       conf.get("spark.network.timeout", "120s"));
+    // spark.模块.io.connectionTimeout
     long defaultTimeoutMs = JavaUtils.timeStringAsSec(
       conf.get(SPARK_NETWORK_IO_CONNECTIONTIMEOUT_KEY, defaultNetworkTimeoutS + "s")) * 1000;
     return (int) defaultTimeoutMs;
@@ -148,8 +152,13 @@ public class TransportConf {
   /**
    * Whether to initialize FileDescriptor lazily or not. If true, file descriptors are
    * created only when data is going to be transferred. This can reduce the number of open files.
+   *
+   * 是否以懒加载的方式初始化FileDescriptor，
+   * 如果是，FileDescriptor只会在数据将要被传输时创建，
+   * 这种方式可以减少打开文件的数量
    */
   public boolean lazyFileDescriptor() {
+    // spark.模块.io.lazyFD，默认为true
     return conf.getBoolean(SPARK_NETWORK_IO_LAZYFD_KEY, true);
   }
 

@@ -41,6 +41,8 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
  * interceptor. When the interceptor indicates that it doesn't need to read any more data,
  * framing resumes. Interceptors should not hold references to the data buffers provided
  * to their handle() method.
+ *
+ * 对从管道中读取的ByteBuf按照数据帧进行解析。
  */
 public class TransportFrameDecoder extends ChannelInboundHandlerAdapter {
 

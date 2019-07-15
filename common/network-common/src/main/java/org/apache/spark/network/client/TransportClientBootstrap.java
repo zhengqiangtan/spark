@@ -27,6 +27,8 @@ import io.netty.channel.Channel;
  * Since connections (and TransportClients) are reused as much as possible, it is generally
  * reasonable to perform an expensive bootstrapping operation, as they often share a lifespan with
  * the JVM itself.
+ *
+ * 当服务端响应客户端连接时在客户端执行一次的引导程序。
  */
 public interface TransportClientBootstrap {
   /** Performs the bootstrapping operation, throwing an exception on failure. */

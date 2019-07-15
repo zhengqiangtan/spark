@@ -29,6 +29,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Encoder used by the server side to encode server-to-client responses.
  * This encoder is stateless so it is safe to be shared by multiple threads.
+ *
+ * 在将消息放入管道前，先对消息内容进行编码，防止管道另一端读取时丢包和解析错误。
  */
 @ChannelHandler.Sharable
 public final class MessageEncoder extends MessageToMessageEncoder<Message> {

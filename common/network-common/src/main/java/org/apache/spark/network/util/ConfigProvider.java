@@ -21,6 +21,7 @@ import java.util.NoSuchElementException;
 
 /**
  * Provides a mechanism for constructing a {@link TransportConf} using some sort of configuration.
+ * 配置提供者
  */
 public abstract class ConfigProvider {
   /** Obtains the value of the given config, throws NoSuchElementException if it doesn't exist. */

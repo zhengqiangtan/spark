@@ -42,6 +42,8 @@ import org.apache.spark.network.util.TransportConf;
 
 /**
  * Server for the efficient, low-level streaming service.
+ *
+ * RPC框架的服务端，提供高效的、低级别的流服务。
  */
 public class TransportServer implements Closeable {
   private static final Logger logger = LoggerFactory.getLogger(TransportServer.class);
@@ -58,7 +60,13 @@ public class TransportServer implements Closeable {
   /**
    * Creates a TransportServer that binds to the given host and the given port, or to any available
    * if 0. If you don't want to bind to any special host, set "hostToBind" to null.
-   * */
+   *
+   * @param context TransportContext的引用
+   * @param hostToBind 绑定主机名
+   * @param portToBind 绑定IP
+   * @param appRpcHandler RPC请求处理器RpcHandler
+   * @param bootstraps TransportServerBootstrap列表
+   */
   public TransportServer(
       TransportContext context,
       String hostToBind,
@@ -66,11 +74,14 @@ public class TransportServer implements Closeable {
       RpcHandler appRpcHandler,
       List<TransportServerBootstrap> bootstraps) {
     this.context = context;
+    // 通过TransportContext的getConf()来获取
     this.conf = context.getConf();
     this.appRpcHandler = appRpcHandler;
+    // 参数检查并赋值给bootstraps
     this.bootstraps = Lists.newArrayList(Preconditions.checkNotNull(bootstraps));
 
     try {
+      // 初始化
       init(hostToBind, portToBind);
     } catch (RuntimeException e) {
       JavaUtils.closeQuietly(this);
@@ -86,15 +97,18 @@ public class TransportServer implements Closeable {
   }
 
   private void init(String hostToBind, int portToBind) {
-
+    // IO模式，默认为NIO，即spark.模块.io.mode
     IOMode ioMode = IOMode.valueOf(conf.ioMode());
+    // Netty服务端需同时创建bossGroup和workerGroup
     EventLoopGroup bossGroup =
       NettyUtils.createEventLoop(ioMode, conf.serverThreads(), "shuffle-server");
     EventLoopGroup workerGroup = bossGroup;
 
+    // 创建一个汇集ByteBuf但对本地线程缓存禁用的分配器
     PooledByteBufAllocator allocator = NettyUtils.createPooledByteBufAllocator(
       conf.preferDirectBufs(), true /* allowCache */, conf.serverThreads());
 
+    // 创建Netty的服务端根引导程序并对其进行配置
     bootstrap = new ServerBootstrap()
       .group(bossGroup, workerGroup)
       .channel(NettyUtils.getServerChannelClass(ioMode))
@@ -113,6 +127,7 @@ public class TransportServer implements Closeable {
       bootstrap.childOption(ChannelOption.SO_SNDBUF, conf.sendBuf());
     }
 
+    // 为根引导程序设置管道初始化回调函数
     bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
       @Override
       protected void initChannel(SocketChannel ch) throws Exception {
@@ -124,6 +139,7 @@ public class TransportServer implements Closeable {
       }
     });
 
+    // 给根引导程序绑定Socket的监听端口
     InetSocketAddress address = hostToBind == null ?
         new InetSocketAddress(portToBind): new InetSocketAddress(hostToBind, portToBind);
     channelFuture = bootstrap.bind(address);

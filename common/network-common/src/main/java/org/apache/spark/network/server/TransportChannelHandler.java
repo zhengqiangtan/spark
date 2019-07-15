@@ -47,6 +47,8 @@ import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
  * We consider a connection timed out if there are outstanding fetch or RPC requests but no traffic
  * on the channel for at least `requestTimeoutMs`. Note that this is duplex traffic; we will not
  * timeout if the client is continuously sending but getting no responses, for simplicity.
+ *
+ * 代理由TransportRequestHandler处理的请求和由TransportResponseHandler处理的响应，并加入传输层的处理。
  */
 public class TransportChannelHandler extends SimpleChannelInboundHandler<Message> {
   private static final Logger logger = LoggerFactory.getLogger(TransportChannelHandler.class);
@@ -115,9 +117,9 @@ public class TransportChannelHandler extends SimpleChannelInboundHandler<Message
 
   @Override
   public void channelRead0(ChannelHandlerContext ctx, Message request) throws Exception {
-    if (request instanceof RequestMessage) {
+    if (request instanceof RequestMessage) { // Request消息，交给requestHandler处理
       requestHandler.handle((RequestMessage) request);
-    } else {
+    } else { // Response消息，交给responseHandler处理
       responseHandler.handle((ResponseMessage) request);
     }
   }

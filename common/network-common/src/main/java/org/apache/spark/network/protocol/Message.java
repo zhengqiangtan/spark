@@ -23,21 +23,46 @@ import org.apache.spark.network.buffer.ManagedBuffer;
 
 /** An on-the-wire transmittable message. */
 public interface Message extends Encodable {
-  /** Used to identify this request type. */
+  /**
+   * Used to identify this request type.
+   * 返回消息类型
+   **/
   Type type();
 
-  /** An optional body for the message. */
+  /**
+   * An optional body for the message.
+   * 返回消息中可选的内容体
+   **/
   ManagedBuffer body();
 
-  /** Whether to include the body of the message in the same frame as the message. */
+  /**
+   * Whether to include the body of the message in the same frame as the message.
+   * 用于判断消息的主题是否包含在消息的同一帧中
+   **/
   boolean isBodyInFrame();
 
   /** Preceding every serialized Message is its type, which allows us to deserialize it. */
   enum Type implements Encodable {
-    ChunkFetchRequest(0), ChunkFetchSuccess(1), ChunkFetchFailure(2),
-    RpcRequest(3), RpcResponse(4), RpcFailure(5),
-    StreamRequest(6), StreamResponse(7), StreamFailure(8),
-    OneWayMessage(9), User(-1);
+    // 请求获取流的单个块的序列
+    ChunkFetchRequest(0),
+    ChunkFetchSuccess(1), // 处理ChunkFetchRequest成功返回的消息
+    ChunkFetchFailure(2), // 处理ChunkFetchRequest失败返回的消息
+
+    // 此消息由远程RPC服务端进行处理，需要服务端向客户端回复的RPC请求信息
+    RpcRequest(3),
+    RpcResponse(4), // 处理RpcRequest成功返回的消息
+    RpcFailure(5), // 处理RpcRequest失败返回的消息
+
+    // 表示向远程的服务发起请求，以获取流式数据
+    StreamRequest(6),
+    StreamResponse(7), // 处理StreamRequest成功返回的消息
+    StreamFailure(8), // 处理StreamRequest失败返回的消息
+
+    // 此消息由远程RPC服务端进行处理，但不需要服务端向客户端回复
+    OneWayMessage(9),
+
+    // 用户自定义类型的消息，是无法被decode的
+    User(-1);
 
     private final byte id;
 
