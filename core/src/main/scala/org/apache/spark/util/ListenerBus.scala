@@ -27,14 +27,17 @@ import org.apache.spark.internal.Logging
 
 /**
  * An event bus which posts events to its listeners.
+  * L代表监听器的泛型参数
  */
 private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
 
   // Marked `private[spark]` for access in tests.
+  // 维护所有注册的监听器
   private[spark] val listeners = new CopyOnWriteArrayList[L]
 
   /**
    * Add a listener to listen events. This method is thread-safe and can be called in any thread.
+    * 向listeners中添加监听器的方法，由于listeners采用CopyOnWrite-ArrayList来实现，所以addListener方法是线程安全的。
    */
   final def addListener(listener: L): Unit = {
     listeners.add(listener)
@@ -43,6 +46,7 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
   /**
    * Remove a listener and it won't receive any events. This method is thread-safe and can be called
    * in any thread.
+    * 从listeners中移除监听器的方法，由于listeners采用CopyOn-WriteArrayList来实现，所以removeListener方法是线程安全的。
    */
   final def removeListener(listener: L): Unit = {
     listeners.remove(listener)
@@ -51,15 +55,18 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
   /**
    * Post the event to all registered listeners. The `postToAll` caller should guarantee calling
    * `postToAll` in the same thread for all events.
+    * 此方法的作用是将事件投递给所有的监听器。
    */
   final def postToAll(event: E): Unit = {
     // JavaConverters can create a JIterableWrapper if we use asScala.
     // However, this method will be called frequently. To avoid the wrapper cost, here we use
     // Java Iterator directly.
+    // 遍历所有的监听器
     val iter = listeners.iterator
     while (iter.hasNext) {
       val listener = iter.next()
       try {
+        // 对监听器发送事件，需子类实现
         doPostEvent(listener, event)
       } catch {
         case NonFatal(e) =>
@@ -71,9 +78,11 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
   /**
    * Post an event to the specified listener. `onPostEvent` is guaranteed to be called in the same
    * thread for all listeners.
+    * 用于将事件投递给指定的监听器，需子类实现。
    */
   protected def doPostEvent(listener: L, event: E): Unit
 
+  // 查找与指定类型相同的监听器列表。
   private[spark] def findListenersByClass[T <: L : ClassTag](): Seq[T] = {
     val c = implicitly[ClassTag[T]].runtimeClass
     listeners.asScala.filter(_.getClass == c).map(_.asInstanceOf[T]).toSeq

@@ -21,10 +21,12 @@ import org.apache.spark.util.ListenerBus
 
 /**
  * A [[SparkListenerEvent]] bus that relays [[SparkListenerEvent]]s to its listeners
+  * 用于将SparkListenerEvent类型的事件投递到SparkListenerInterface类型的监听器。
  */
 private[spark] trait SparkListenerBus
   extends ListenerBus[SparkListenerInterface, SparkListenerEvent] {
 
+  // 通过对SparkListenerEvent事件的匹配，执行SparkListenerInterface监听器的相应方法
   protected override def doPostEvent(
       listener: SparkListenerInterface,
       event: SparkListenerEvent): Unit = {
