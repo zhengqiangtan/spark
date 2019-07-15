@@ -56,12 +56,15 @@ private[spark] class SparkUI private (
   with Logging
   with UIRoot {
 
+  // 标记当前SparkUI能否提供“杀死”Stage或者Job的链接。
   val killEnabled = sc.map(_.conf.getBoolean("spark.ui.killEnabled", true)).getOrElse(false)
 
+  // 当前应用的ID
   var appId: String = _
 
   /** Initialize all components of the server. */
   def initialize() {
+    // 构建页面布局并给每个WebUITab中的所有WebUIPage创建对应的ServletContextHandler。
     val jobsTab = new JobsTab(this)
     attachTab(jobsTab)
     val stagesTab = new StagesTab(this)
@@ -69,7 +72,12 @@ private[spark] class SparkUI private (
     attachTab(new StorageTab(this))
     attachTab(new EnvironmentTab(this))
     attachTab(new ExecutorsTab(this))
+    /**
+      * 调用JettyUtils的createStaticHandler方法创建对静态目录org/apache/spark/ui/static提供
+      * 文件服务的ServletContextHandler，并使用attachHandler方法追加到SparkUI的服务中。
+      */
     attachHandler(createStaticHandler(SparkUI.STATIC_RESOURCE_DIR, "/static"))
+    // 调用JettyUtils的createRedirectHandler方法创建几个将用户对源路径的请求重定向到目标路径的ServletContextHandler。
     attachHandler(createRedirectHandler("/", "/jobs/", basePath = basePath))
     attachHandler(ApiRootResource.getServletHandler(this))
     // These should be POST only, but, the YARN AM proxy won't proxy POSTs
@@ -199,24 +207,35 @@ private[spark] object SparkUI {
       jobProgressListener: Option[JobProgressListener] = None,
       startTime: Long): SparkUI = {
 
+    // 获取作业进度监听器
     val _jobProgressListener: JobProgressListener = jobProgressListener.getOrElse {
+      // 如果没有的话会新建并添加到事件总线中
       val listener = new JobProgressListener(conf)
       listenerBus.addListener(listener)
       listener
     }
 
+    // >>>>> 新建了一些监听器
+
+    // 用于对JVM参数、Spark属性、Java系统属性、classpath等进行监控
     val environmentListener = new EnvironmentListener
+    // 用于维护Executor的存储状态的StorageStatusListener
     val storageStatusListener = new StorageStatusListener(conf)
+    // 用于准备将Executor的信息展示在ExecutorsTab的ExecutorsListener
     val executorsListener = new ExecutorsListener(storageStatusListener, conf)
+    // 用于准备将Executor相关存储信息展示在BlockManagerUI的StorageListener
     val storageListener = new StorageListener(storageStatusListener)
+    // 用于构建RDD的DAG（有向无关图）的RDDOperationGraphListener
     val operationGraphListener = new RDDOperationGraphListener(conf)
 
+    // >>>>> 添加新建的监听器
     listenerBus.addListener(environmentListener)
     listenerBus.addListener(storageStatusListener)
     listenerBus.addListener(executorsListener)
     listenerBus.addListener(storageListener)
     listenerBus.addListener(operationGraphListener)
 
+    // 构造SparkUI
     new SparkUI(sc, conf, securityManager, environmentListener, storageStatusListener,
       executorsListener, _jobProgressListener, storageListener, operationGraphListener,
       appName, basePath, startTime)

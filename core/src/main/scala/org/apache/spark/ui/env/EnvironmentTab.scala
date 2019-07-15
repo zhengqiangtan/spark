@@ -21,6 +21,7 @@ import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.scheduler._
 import org.apache.spark.ui._
 
+// 用于展示JVM、Spark属性、系统属性、类路径等相关信息的标签页
 private[ui] class EnvironmentTab(parent: SparkUI) extends SparkUITab(parent, "environment") {
   val listener = parent.environmentListener
   attachPage(new EnvironmentPage(this))

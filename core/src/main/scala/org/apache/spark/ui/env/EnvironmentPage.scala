@@ -33,6 +33,7 @@ private[ui] class EnvironmentPage(parent: EnvironmentTab) extends WebUIPage("") 
   }
 
   def render(request: HttpServletRequest): Seq[Node] = {
+    // 调用UIUtils的listingTable方法生成JVM运行时信息、Spark属性信息、系统属性信息、类路径信息的表格
     val runtimeInformationTable = UIUtils.listingTable(
       propertyHeader, jvmRow, listener.jvmInformation, fixedWidth = true)
     val sparkPropertiesTable = UIUtils.listingTable(
@@ -41,6 +42,7 @@ private[ui] class EnvironmentPage(parent: EnvironmentTab) extends WebUIPage("") 
       propertyHeader, propertyRow, listener.systemProperties, fixedWidth = true)
     val classpathEntriesTable = UIUtils.listingTable(
       classPathHeaders, classPathRow, listener.classpathEntries, fixedWidth = true)
+    // 拼接content
     val content =
       <span>
         <h4>Runtime Information</h4> {runtimeInformationTable}
@@ -49,11 +51,14 @@ private[ui] class EnvironmentPage(parent: EnvironmentTab) extends WebUIPage("") 
         <h4>Classpath Entries</h4> {classpathEntriesTable}
       </span>
 
+    // // 调用UIUtils的headerSparkPage方法封装好css、js、header及页面布局等
     UIUtils.headerSparkPage("Environment", content, parent)
   }
 
+  // 定义JVM运行时信息、Spark属性信息、系统属性信息的表格头部propertyHeader和类路径信息的表格头部
   private def propertyHeader = Seq("Name", "Value")
   private def classPathHeaders = Seq("Resource", "Source")
+  // 定义JVM运行时信息的表格中每行数据的生成方法jvmRow
   private def jvmRow(kv: (String, String)) = <tr><td>{kv._1}</td><td>{kv._2}</td></tr>
   private def propertyRow(kv: (String, String)) = <tr><td>{kv._1}</td><td>{kv._2}</td></tr>
   private def classPathRow(data: (String, String)) = <tr><td>{data._1}</td><td>{data._2}</td></tr>

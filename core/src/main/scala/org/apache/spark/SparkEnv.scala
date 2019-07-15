@@ -160,17 +160,25 @@ object SparkEnv extends Logging {
       listenerBus: LiveListenerBus,
       numCores: Int,
       mockOutputCommitCoordinator: Option[OutputCommitCoordinator] = None): SparkEnv = {
+    // 检查Driver Host
     assert(conf.contains(DRIVER_HOST_ADDRESS),
       s"${DRIVER_HOST_ADDRESS.key} is not set on the driver!")
     assert(conf.contains("spark.driver.port"), "spark.driver.port is not set on the driver!")
+    // Driver的绑定地址
     val bindAddress = conf.get(DRIVER_BIND_ADDRESS)
+    // Driver的监听地址
     val advertiseAddress = conf.get(DRIVER_HOST_ADDRESS)
     val port = conf.get("spark.driver.port").toInt
-    val ioEncryptionKey = if (conf.get(IO_ENCRYPTION_ENABLED)) {
+
+    // IO加密密钥
+    val ioEncryptionKey = if (conf.get(IO_ENCRYPTION_ENABLED)) { // spark.io.encryption.enabled属性为true时
+      // 调用CryptoStreamUtils的createKey方法创建密钥。
       Some(CryptoStreamUtils.createKey(conf))
     } else {
       None
     }
+
+    // 创建并返回
     create(
       conf,
       SparkContext.DRIVER_IDENTIFIER,

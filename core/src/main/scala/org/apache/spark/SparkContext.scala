@@ -73,9 +73,11 @@ import org.apache.spark.util._
 class SparkContext(config: SparkConf) extends Logging {
 
   // The call site where this SparkContext was constructed.
+  // 保存着线程栈中最靠近栈顶的用户定义的类及最靠近栈底的Scala或者Spark核心类信息
   private val creationSite: CallSite = Utils.getCallSite()
 
   // If true, log warnings instead of throwing exceptions when multiple SparkContexts are active
+  // 是否允许多个SparkContext实例。默认为false，可以通过属性spark.driver.allowMultipleContexts来控制。
   private val allowMultipleContexts: Boolean =
     config.getBoolean("spark.driver.allowMultipleContexts", false)
 
@@ -84,8 +86,10 @@ class SparkContext(config: SparkConf) extends Logging {
   // NOTE: this must be placed at the beginning of the SparkContext constructor.
   SparkContext.markPartiallyConstructed(this, allowMultipleContexts)
 
+  // SparkContext启动的时间戳。
   val startTime = System.currentTimeMillis()
 
+  // 标记SparkContext是否已经停止的状态
   private[spark] val stopped: AtomicBoolean = new AtomicBoolean(false)
 
   private[spark] def assertNotStopped(): Unit = {
@@ -192,27 +196,82 @@ class SparkContext(config: SparkConf) extends Logging {
    | constructor is still running is safe.                                                 |
    * ------------------------------------------------------------------------------------- */
 
+  // SparkContext的配置
   private var _conf: SparkConf = _
+  /**
+    * 事件日志的路径。当spark.eventLog.enabled属性为true时启用。
+    * 默认为/tmp/spark-events，也可以通过spark.eventLog.dir属性指定。
+    */
   private var _eventLogDir: Option[URI] = None
+  /**
+    * 事件日志的压缩算法。
+    * 当spark.eventLog.enabled属性与spark.eventLog.compress属性皆为true时启用。
+    * 压缩算法默认为lz4，也可以通过spark.io.compression.codec属性指定。
+    * Spark目前支持的压缩算法包括lzf、snappy和lz4这3种。
+    */
   private var _eventLogCodec: Option[String] = None
+  /**
+    * Spark运行时环境。SparkEnv内部包含了很多组件，例如：
+    * serializerManager、RpcEnv、BlockManager、mapOutputTracker等。
+    */
   private var _env: SparkEnv = _
+  // 作业进度监听器。
   private var _jobProgressListener: JobProgressListener = _
+  // 提供对作业、Stage（阶段）等的监控信息。
   private var _statusTracker: SparkStatusTracker = _
+  // 利用SparkStatusTracker的API，在控制台展示Stage的进度。
   private var _progressBar: Option[ConsoleProgressBar] = None
+  /**
+    * Spark的用户界面。间接依赖于计算引擎、调度系统、存储体系。
+    * 作业（Job）、阶段（Stage）、存储、执行器（Executor）等组件的监控数据都会
+    * 以SparkListenerEvent的形式投递到LiveListenerBus中，
+    * SparkUI将从各个SparkListener中读取数据并显示到Web界面。
+    */
   private var _ui: Option[SparkUI] = None
+  /**
+    * Hadoop的配置信息。
+    * 如果系统属性SPARK_YARN_MODE为true或者环境变量SPARK_YARN_MODE为true，那么将会是YARN的配置，否则为Hadoop配置。
+    */
   private var _hadoopConfiguration: Configuration = _
+  /**
+    * Executor的内存大小。默认值为1024MB。
+    * 可以通过设置环境变量（SPARK_MEM或者SPARK_EXECUTOR_MEMORY）或者spark.executor.memory属性指定。
+    * spark.executor.memory的优先级最高，SPARK_EXECUTOR_MEMORY次之。
+    */
   private var _executorMemory: Int = _
   private var _schedulerBackend: SchedulerBackend = _
+  /**
+    * 任务调度器，TaskScheduler按照调度算法对集群管理器已经分配给应用程序的资源进行二次调度后分配给任务。
+    * TaskScheduler调度的Task是由DAGScheduler创建的，所以DAGScheduler是TaskScheduler的前置调度。
+    */
   private var _taskScheduler: TaskScheduler = _
+  // 心跳接收器。所有Executor都会向HeartbeatReceiver发送心跳信息。
   private var _heartbeatReceiver: RpcEndpointRef = _
+  // DAG调度器，负责创建Job，将DAG中的RDD划分到不同的Stage、提交Stage等。
   @volatile private var _dagScheduler: DAGScheduler = _
+  // 当前应用的标识。
   private var _applicationId: String = _
+  // 当前应用尝试执行的标识。Spark Driver在执行时会多次尝试执行，每次尝试都将生成一个标识来代表应用尝试执行的身份。
   private var _applicationAttemptId: Option[String] = None
+  // 将事件持久化到存储的监听器，是SparkContext中的可选组件。当spark.eventLog.enabled属性为true时启用。
   private var _eventLogger: Option[EventLoggingListener] = None
+  /**
+    * Executor动态分配管理器，可以根据工作负载动态调整Executor的数量。
+    * 在配置spark.dynamicAllocation.enabled属性为true的前提下，
+    * 在非local模式下或者当spark.dynamicAllocation.testing属性为true时启用。
+    */
   private var _executorAllocationManager: Option[ExecutorAllocationManager] = None
+  // 上下文清理器，以异步方式清理那些超出应用作用域范围的RDD、ShuffleDependency和Broadcast等信息。
   private var _cleaner: Option[ContextCleaner] = None
+  // LiveListenerBus是否已经启动的标记。
   private var _listenerBusStarted: Boolean = false
+  /**
+    * 用户设置的Jar文件。
+    * 当用户选择的部署模式是YARN时，是由spark.jars属性指定的Jar文件和spark.yarn.dist.jars属性指定的Jar文件的并集。
+    * 其他模式下只采用由spark.jars属性指定的Jar文件。
+    */
   private var _jars: Seq[String] = _
+  // 用户设置的文件。可以使用spark.files属性进行指定。
   private var _files: Seq[String] = _
   private var _shutdownHookRef: AnyRef = _
 
@@ -251,19 +310,23 @@ class SparkContext(config: SparkConf) extends Logging {
 
   // This function allows components created by SparkEnv to be mocked in unit tests:
   private[spark] def createSparkEnv(
-      conf: SparkConf,
-      isLocal: Boolean,
-      listenerBus: LiveListenerBus): SparkEnv = {
+      conf: SparkConf, // SparkConf对象
+      isLocal: Boolean, // 是否是Local模式运行
+      listenerBus: LiveListenerBus): SparkEnv = { // 事件总线
+    // 使用SparkEnv的方法创建
     SparkEnv.createDriverEnv(conf, isLocal, listenerBus, SparkContext.numDriverCores(master))
   }
 
   private[spark] def env: SparkEnv = _env
 
   // Used to store a URL for each static file/jar together with the file's local timestamp
+  // 用于记录每个本地文件的URL与添加此文件到addedFiles时的时间戳之间的映射缓存。
   private[spark] val addedFiles = new ConcurrentHashMap[String, Long]().asScala
+  // 用于记录每个本地Jar文件的URL与添加此文件到addedJars时的时间戳之间的映射缓存。
   private[spark] val addedJars = new ConcurrentHashMap[String, Long]().asScala
 
   // Keeps track of all persisted RDDs
+  // 用于对所有持久化的RDD保持跟踪。
   private[spark] val persistentRdds = {
     val map: ConcurrentMap[Int, RDD[_]] = new MapMaker().weakValues().makeMap[Int, RDD[_]]()
     map.asScala
@@ -289,9 +352,11 @@ class SparkContext(config: SparkConf) extends Logging {
   private[spark] def executorMemory: Int = _executorMemory
 
   // Environment variables to pass to our executors.
+  // 用于存储环境变量。
   private[spark] val executorEnvs = HashMap[String, String]()
 
   // Set SPARK_USER for user who is running SparkContext.
+  // 当前系统的登录用户，也可以通过系统环境变量SPARK_USER进行设置。
   val sparkUser = Utils.getCurrentUserName()
 
   private[spark] def schedulerBackend: SchedulerBackend = _schedulerBackend
@@ -324,9 +389,11 @@ class SparkContext(config: SparkConf) extends Logging {
 
   private[spark] def cleaner: Option[ContextCleaner] = _cleaner
 
+  // RDD计算过程中保存检查点时所需要的目录。
   private[spark] var checkpointDir: Option[String] = None
 
   // Thread Local variable that can be used by users to pass information down the stack
+  // 由InheritableThreadLocal保护的线程本地变量，其中的属性值可以沿着线程栈传递下去，供用户使用。
   protected[spark] val localProperties = new InheritableThreadLocal[Properties] {
     override protected def childValue(parent: Properties): Properties = {
       // Note: make a clone such that changes in the parent properties aren't reflected in
@@ -372,9 +439,12 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   try {
+    // 从传入的SparkConf克隆一份
     _conf = config.clone()
+    // 校验一些配置
     _conf.validateSettings()
 
+    // 必须设置spark.master和sparl.app.name
     if (!_conf.contains("spark.master")) {
       throw new SparkException("A master URL must be set in your configuration")
     }
@@ -383,28 +453,35 @@ class SparkContext(config: SparkConf) extends Logging {
     }
 
     // System property spark.yarn.app.id must be set if user code ran by AM on a YARN cluster
+    // 当使用YARN Cluster方式提交时需要设置spark.yarn.app.id
     if (master == "yarn" && deployMode == "cluster" && !_conf.contains("spark.yarn.app.id")) {
       throw new SparkException("Detected yarn cluster mode, but isn't running on a cluster. " +
         "Deployment to YARN is not supported directly by SparkContext. Please use spark-submit.")
     }
 
+    // 是否打印SparkConf信息
     if (_conf.getBoolean("spark.logConf", false)) {
       logInfo("Spark configuration:\n" + _conf.toDebugString)
     }
 
     // Set Spark driver host and port system properties. This explicitly sets the configuration
     // instead of relying on the default value of the config constant.
+    // Driver的host和port
     _conf.set(DRIVER_HOST_ADDRESS, _conf.get(DRIVER_HOST_ADDRESS))
     _conf.setIfMissing("spark.driver.port", "0")
 
+    // 设置spark.executor.id为driver
     _conf.set("spark.executor.id", SparkContext.DRIVER_IDENTIFIER)
 
+    // 用户设置的Jar包文件
     _jars = Utils.getUserJars(_conf)
+    // 用户设置的文件
     _files = _conf.getOption("spark.files").map(_.split(",")).map(_.filter(_.nonEmpty))
       .toSeq.flatten
 
+    // 日志目录
     _eventLogDir =
-      if (isEventLogEnabled) {
+      if (isEventLogEnabled) { // 首先需要开启日志功能，spark.eventLog.enabled
         val unresolvedDir = conf.get("spark.eventLog.dir", EventLoggingListener.DEFAULT_LOG_DIR)
           .stripSuffix("/")
         Some(Utils.resolveURI(unresolvedDir))
@@ -412,6 +489,7 @@ class SparkContext(config: SparkConf) extends Logging {
         None
       }
 
+    // 日志压缩器
     _eventLogCodec = {
       val compress = _conf.getBoolean("spark.eventLog.compress", false)
       if (compress && isEventLogEnabled) {
@@ -421,25 +499,31 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     }
 
+    // YARN Client模式
     if (master == "yarn" && deployMode == "client") System.setProperty("SPARK_YARN_MODE", "true")
 
     // "_jobProgressListener" should be set up before creating SparkEnv because when creating
     // "SparkEnv", some messages will be posted to "listenerBus" and we should not miss them.
+    // Job进度监听器
     _jobProgressListener = new JobProgressListener(_conf)
     listenerBus.addListener(jobProgressListener)
 
     // Create the Spark execution environment (cache, map output tracker, etc)
+    // 创建SparkEnv
     _env = createSparkEnv(_conf, isLocal, listenerBus)
     SparkEnv.set(_env)
 
     // If running the REPL, register the repl's output dir with the file server.
+    // REPL模式运行，需要注册REPL的输出目录到文件服务器
     _conf.getOption("spark.repl.class.outputDir").foreach { path =>
       val replUri = _env.rpcEnv.fileServer.addDirectory("/classes", new File(path))
       _conf.set("spark.repl.class.uri", replUri)
     }
 
+    // 状态跟踪器初始化，提供对作业、Stage（阶段）等的监控信息。
     _statusTracker = new SparkStatusTracker(this)
 
+    // 创建控制台进度条打印组件，由spark.ui.showConsoleProgress配置开启
     _progressBar =
       if (_conf.getBoolean("spark.ui.showConsoleProgress", true) && !log.isInfoEnabled) {
         Some(new ConsoleProgressBar(this))
@@ -447,8 +531,10 @@ class SparkContext(config: SparkConf) extends Logging {
         None
       }
 
+    // 创建Spark的WebUI
     _ui =
       if (conf.getBoolean("spark.ui.enabled", true)) {
+        // 由SparkUI的方法来创建，传入了事件总线，作业进度监听器等组件
         Some(SparkUI.createLiveUI(this, _conf, listenerBus, _jobProgressListener,
           _env.securityManager, appName, startTime = startTime))
       } else {
@@ -457,6 +543,7 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     // Bind the UI before starting the task scheduler to communicate
     // the bound port to the cluster manager properly
+    // 绑定端口
     _ui.foreach(_.bind())
 
     _hadoopConfiguration = SparkHadoopUtil.get.newConfiguration(_conf)
@@ -2134,10 +2221,12 @@ class SparkContext(config: SparkConf) extends Logging {
    */
   def defaultMinPartitions: Int = math.min(defaultParallelism, 2)
 
+  // 用于生成下一个Shuffle的身份标识。
   private val nextShuffleId = new AtomicInteger(0)
 
   private[spark] def newShuffleId(): Int = nextShuffleId.getAndIncrement()
 
+  // 用于生成下一个RDD的身份标识。
   private val nextRddId = new AtomicInteger(0)
 
   /** Register a new RDD, returning its RDD ID */

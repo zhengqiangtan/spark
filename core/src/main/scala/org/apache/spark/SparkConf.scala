@@ -458,6 +458,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
    * idempotent - may mutate this conf object to convert deprecated settings to supported ones.
    */
   private[spark] def validateSettings() {
+    // 在1.0版本之后该配置会被Cluster Manager的SPARK_LOCAL_DIRS或LOCAL_DIRS覆盖
     if (contains("spark.local.dir")) {
       val msg = "In Spark 1.0 and later spark.local.dir will be overridden by the value set by " +
         "the cluster manager (via SPARK_LOCAL_DIRS in mesos/standalone and LOCAL_DIRS in YARN)."
@@ -472,6 +473,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     val sparkExecutorInstances = "spark.executor.instances"
 
     // Used by Yarn in 1.1 and before
+    // spark.driver.libraryPath在1.2被废弃
     sys.props.get("spark.driver.libraryPath").foreach { value =>
       val warning =
         s"""
@@ -484,6 +486,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     }
 
     // Validate spark.executor.extraJavaOptions
+    // 检查spark.executor.extraJavaOptions
     getOption(executorOptsKey).foreach { javaOpts =>
       if (javaOpts.contains("-Dspark")) {
         val msg = s"$executorOptsKey is not allowed to set Spark options (was '$javaOpts'). " +
@@ -498,6 +501,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     }
 
     // Validate memory fractions
+    // 检查内存相关的配置
     val deprecatedMemoryKeys = Seq(
       "spark.storage.memoryFraction",
       "spark.shuffle.memoryFraction",
