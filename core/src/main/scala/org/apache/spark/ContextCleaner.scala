@@ -58,14 +58,22 @@ private class CleanupTaskWeakReference(
  */
 private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
 
+  // 缓存AnyRef的虚引用。
   private val referenceBuffer = new ConcurrentLinkedQueue[CleanupTaskWeakReference]()
 
+  // 缓存顶级的AnyRef引用。
   private val referenceQueue = new ReferenceQueue[AnyRef]
 
+  // 缓存清理工作的监听器数组。
   private val listeners = new ConcurrentLinkedQueue[CleanerListener]()
 
+  // 用于具体清理工作的线程。此线程为守护线程，名称为Spark Context Cleaner。
   private val cleaningThread = new Thread() { override def run() { keepCleaning() }}
 
+  /**
+    * 用于执行GC（Garbage Collection，垃圾收集）的调度线程池，
+    * 此线程池只包含一个线程，启动的线程名称以context-cleaner-periodic-gc开头。
+    */
   private val periodicGCService: ScheduledExecutorService =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("context-cleaner-periodic-gc")
 
@@ -76,6 +84,8 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * In long-running applications with large driver JVMs, where there is little memory pressure
    * on the driver, this may happen very occasionally or not at all. Not cleaning at all may
    * lead to executors running out of disk space after a while.
+    *
+    * 执行GC的时间间隔。可通过spark.cleaner.periodicGC.interval属性进行配置，默认是30分钟。
    */
   private val periodicGCInterval =
     sc.conf.getTimeAsSeconds("spark.cleaner.periodicGC.interval", "30min")
@@ -89,6 +99,9 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * issue inter-dependent blocking RPC messages to each other at high frequencies. This happens,
    * for instance, when the driver performs a GC and cleans up all broadcast blocks that are no
    * longer in scope.
+    *
+    * 清理非Shuffle的其他数据是否是阻塞式的。
+    * 可通过spark.cleaner.referenceTracking.blocking属性进行配置，默认是true。
    */
   private val blockOnCleanupTasks = sc.conf.getBoolean(
     "spark.cleaner.referenceTracking.blocking", true)
@@ -102,10 +115,16 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
    * the cleanup of RDDs and broadcasts. This is intended to be a temporary workaround,
    * until the real RPC issue (referred to in the comment above `blockOnCleanupTasks`) is
    * resolved.
+    *
+    * 清理Shuffle数据是否是阻塞式的。
+    * 可通过spark.cleaner.referenceTracking.blocking.shuffle属性进行配置，默认是false。
+    * 清理Shuffle数据包括清理MapOutputTracker中指定ShuffleId对应的map任务状态
+    * 和ShuffleManager中注册的ShuffleId对应的Shuffle元数据。
    */
   private val blockOnShuffleCleanupTasks = sc.conf.getBoolean(
     "spark.cleaner.referenceTracking.blocking.shuffle", false)
 
+  // ContextCleaner是否停止的状态标记。
   @volatile private var stopped = false
 
   /** Attach a listener object to get information of when objects are cleaned. */
@@ -115,9 +134,13 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
 
   /** Start the cleaner. */
   def start(): Unit = {
+    // 将cleaningThread设置为守护线程。
     cleaningThread.setDaemon(true)
+    // 指定名称为Spark Context Cleaner。
     cleaningThread.setName("Spark Context Cleaner")
+    // 启动cleaningThread线程。
     cleaningThread.start()
+    // 设置以periodicGCInterval作为时间间隔定时进行GC操作的任务。
     periodicGCService.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = System.gc()
     }, periodicGCInterval, periodicGCInterval, TimeUnit.SECONDS)
@@ -176,19 +199,20 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
           .map(_.asInstanceOf[CleanupTaskWeakReference])
         // Synchronize here to avoid being interrupted on stop()
         synchronized {
+          // 匹配Task进行不同的清理
           reference.map(_.task).foreach { task =>
             logDebug("Got cleaning task " + task)
             referenceBuffer.remove(reference.get)
             task match {
-              case CleanRDD(rddId) =>
+              case CleanRDD(rddId) => // RDD
                 doCleanupRDD(rddId, blocking = blockOnCleanupTasks)
-              case CleanShuffle(shuffleId) =>
+              case CleanShuffle(shuffleId) => // Shuffle
                 doCleanupShuffle(shuffleId, blocking = blockOnShuffleCleanupTasks)
-              case CleanBroadcast(broadcastId) =>
+              case CleanBroadcast(broadcastId) => // Broadcast
                 doCleanupBroadcast(broadcastId, blocking = blockOnCleanupTasks)
-              case CleanAccum(accId) =>
+              case CleanAccum(accId) => // Accumulator
                 doCleanupAccum(accId, blocking = blockOnCleanupTasks)
-              case CleanCheckpoint(rddId) =>
+              case CleanCheckpoint(rddId) => // Checkpoint
                 doCleanCheckpoint(rddId)
             }
           }
@@ -204,7 +228,9 @@ private[spark] class ContextCleaner(sc: SparkContext) extends Logging {
   def doCleanupRDD(rddId: Int, blocking: Boolean): Unit = {
     try {
       logDebug("Cleaning RDD " + rddId)
+      // 移除RDD持久化
       sc.unpersistRDD(rddId, blocking)
+      // 调用所有监听器的rddCleaned方法，移除对RDD的跟踪监听器
       listeners.asScala.foreach(_.rddCleaned(rddId))
       logInfo("Cleaned RDD " + rddId)
     } catch {
