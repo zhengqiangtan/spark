@@ -193,30 +193,43 @@ private[spark] class SecurityManager(
   // allow all users/groups to have view/modify permissions
   private val WILDCARD_ACL = "*"
 
+  // 是否开启认证。可以通过spark.authenticate属性配置，默认为false。
   private val authOn = sparkConf.getBoolean(SecurityManager.SPARK_AUTH_CONF, false)
   // keep spark.ui.acls.enable for backwards compatibility with 1.0
+  /**
+    * 是否对账号进行授权检查。
+    * 可通过spark.acls.enable（优先级较高）或spark.ui.acls.enable（此属性是为了向前兼容）属性进行配置。
+    * aclsOn的默认值为false。
+    */
   private var aclsOn =
     sparkConf.getBoolean("spark.acls.enable", sparkConf.getBoolean("spark.ui.acls.enable", false))
 
   // admin acls should be set before view or modify acls
+  // 管理员账号集合。可以通过spark.admin.acls属性配置，默认为空。
   private var adminAcls: Set[String] =
     stringToSet(sparkConf.get("spark.admin.acls", ""))
 
   // admin group acls should be set before view or modify group acls
+  // 管理员账号所在组的集合。可以通过spark.admin.acls.groups属性配置，默认为空。
   private var adminAclsGroups : Set[String] =
     stringToSet(sparkConf.get("spark.admin.acls.groups", ""))
 
+  // 有查看权限的账号的集合。包括adminAcls、defaultAclUsers及spark.ui.view.acls属性配置的用户。
   private var viewAcls: Set[String] = _
 
+  // 拥有查看权限的账号，所在组的集合。包括adminAclsGroups和spark.ui.view.acls.groups属性配置的用户。
   private var viewAclsGroups: Set[String] = _
 
   // list of users who have permission to modify the application. This should
   // apply to both UI and CLI for things like killing the application.
+  // 拥有查看权限的账号，所在组的集合。包括adminAclsGroups和spark.ui.view.acls.groups属性配置的用户。
   private var modifyAcls: Set[String] = _
 
+  // 拥有修改权限的账号所在组的集合。包括adminAclsGroups和spark.modify.acls.groups属性配置的用户。
   private var modifyAclsGroups: Set[String] = _
 
   // always add the current user and SPARK_USER to the viewAcls
+  // 默认用户。包括系统属性user.name指定的用户或系统登录用户或者通过系统环境变量SPARK_USER进行设置的用户。
   private val defaultAclUsers = Set[String](System.getProperty("user.name", ""),
     Utils.getCurrentUserName())
 
@@ -226,7 +239,16 @@ private[spark] class SecurityManager(
   setViewAclsGroups(sparkConf.get("spark.ui.view.acls.groups", ""));
   setModifyAclsGroups(sparkConf.get("spark.modify.acls.groups", ""));
 
+  /**
+    * 密钥。
+    * 在YARN模式下，首先使用sparkCookie从Hadoop UGI中获取密钥。
+    * 如果Hadoop UGI没有保存密钥，则生成新的密钥并存入Hadoop UGI，
+    * 密钥长度可以通过spark.authenticate.secretBitLength属性指定。
+    * 其他模式下，则需要设置环境变量_SPARK_AUTH_SECRET（优先级更高）
+    * 或spark.authenticate.secret属性指定。
+    */
   private val secretKey = generateSecretKey()
+
   logInfo("SecurityManager: authentication " + (if (authOn) "enabled" else "disabled") +
     "; ui acls " + (if (aclsOn) "enabled" else "disabled") +
     "; users  with view permissions: " + viewAcls.toString() +
@@ -238,12 +260,15 @@ private[spark] class SecurityManager(
   // This is needed by the HTTP client fetching from the HttpServer. Put here so its
   // only set once.
   if (authOn) {
+    // 设置默认的口令认证实例Authenticator，它的getPasswordAuthentication方法用于获取用户名、密码
     Authenticator.setDefault(
       new Authenticator() {
         override def getPasswordAuthentication(): PasswordAuthentication = {
           var passAuth: PasswordAuthentication = null
+          // 每次使用HTTP client从HTTP服务器获取用户的用户名和密码
           val userInfo = getRequestingURL().getUserInfo()
           if (userInfo != null) {
+            // 切分用户名和密码并构造PasswordAuthentication对象
             val  parts = userInfo.split(":", 2)
             passAuth = new PasswordAuthentication(parts(0), parts(1).toCharArray())
           }
@@ -429,30 +454,36 @@ private[spark] class SecurityManager(
   private def generateSecretKey(): String = {
     if (!isAuthenticationEnabled) {
       null
-    } else if (SparkHadoopUtil.get.isYarnMode) {
+    } else if (SparkHadoopUtil.get.isYarnMode) { // YARN模式
       // In YARN mode, the secure cookie will be created by the driver and stashed in the
       // user's credentials, where executors can get it. The check for an array of size 0
       // is because of the test code in YarnSparkHadoopUtilSuite.
+      // 从Hadoop UGI中获取密钥
       val secretKey = SparkHadoopUtil.get.getSecretKeyFromUserCredentials(SECRET_LOOKUP_KEY)
       if (secretKey == null || secretKey.length == 0) {
+        // 密钥不存在，需要生成
         logDebug("generateSecretKey: yarn mode, secret key from credentials is null")
         val rnd = new SecureRandom()
+        // 密钥长度，默认为256，可由spark.authenticate.secretBitLength配置指定
         val length = sparkConf.getInt("spark.authenticate.secretBitLength", 256) / JByte.SIZE
         val secret = new Array[Byte](length)
+        // 生成密钥
         rnd.nextBytes(secret)
 
         val cookie = HashCodes.fromBytes(secret).toString()
+        // 存入Hadoop UGI
         SparkHadoopUtil.get.addSecretKeyToUserCredentials(SECRET_LOOKUP_KEY, cookie)
         cookie
       } else {
+        // 否则就返回
         new Text(secretKey).toString
       }
-    } else {
+    } else { // 其它模式
       // user must have set spark.authenticate.secret config
       // For Master/Worker, auth secret is in conf; for Executors, it is in env variable
-      Option(sparkConf.getenv(SecurityManager.ENV_AUTH_SECRET))
-        .orElse(sparkConf.getOption(SecurityManager.SPARK_AUTH_SECRET_CONF)) match {
-        case Some(value) => value
+      Option(sparkConf.getenv(SecurityManager.ENV_AUTH_SECRET)) // _SPARK_AUTH_SECRET
+        .orElse(sparkConf.getOption(SecurityManager.SPARK_AUTH_SECRET_CONF)) match { // spark.authenticate.secret
+        case Some(value) => value // 由spark.authenticate.secret参数指定
         case None =>
           throw new IllegalArgumentException(
             "Error: a secret key must be specified via the " +

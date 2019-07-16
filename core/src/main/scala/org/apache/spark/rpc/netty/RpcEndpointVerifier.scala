@@ -28,6 +28,11 @@ private[netty] class RpcEndpointVerifier(override val rpcEnv: RpcEnv, dispatcher
   extends RpcEndpoint {
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+    /**
+      * 接收CheckExistence类型的消息，匹配得到name参数，该参数代表要查询的RpcEndpoint的名称，
+      * 使用Dispatcher的verify()方法进行查询，
+      * 将查询到的结果通过RpcCallContext的reply()方法回复客户端
+      */
     case RpcEndpointVerifier.CheckExistence(name) => context.reply(dispatcher.verify(name))
   }
 }

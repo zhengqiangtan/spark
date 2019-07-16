@@ -51,8 +51,10 @@ private[spark] object RpcEnv {
       conf: SparkConf,
       securityManager: SecurityManager,
       clientMode: Boolean): RpcEnv = {
+    // 构造配置
     val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port, securityManager,
       clientMode)
+    // 使用工厂创建
     new NettyRpcEnvFactory().create(config)
   }
 }
@@ -69,6 +71,7 @@ private[spark] object RpcEnv {
  */
 private[spark] abstract class RpcEnv(conf: SparkConf) {
 
+  // 根据"spark.rpc.lookupTimeout"或"spark.network.timeout"配置构造RpcTimeout对象，默认超时时间为120秒
   private[spark] val defaultLookupTimeout = RpcUtils.lookupRpcTimeout(conf)
 
   /**
@@ -97,14 +100,20 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
    * Retrieve the [[RpcEndpointRef]] represented by `uri`. This is a blocking action.
    */
   def setupEndpointRefByURI(uri: String): RpcEndpointRef = {
+    /**
+      * asyncSetupEndpointRefByURI的功能是向远端NettyRpcEnv询问指定名称的RpcEndpoint的NettyRpcEndpointRef
+      * defaultLookupTimeout是根据参数构造的RpcTimeout对象，调用其awaitResult()方法进行超时操作
+      */
     defaultLookupTimeout.awaitResult(asyncSetupEndpointRefByURI(uri))
   }
 
   /**
    * Retrieve the [[RpcEndpointRef]] represented by `address` and `endpointName`.
    * This is a blocking action.
+    * 使用RpcAddress和RpcEndpoint的名称，得到对应的RpcEndpointRef
    */
   def setupEndpointRef(address: RpcAddress, endpointName: String): RpcEndpointRef = {
+    // 封装RpcAddress和endpointName为RpcEndpointAddress对象
     setupEndpointRefByURI(RpcEndpointAddress(address, endpointName).toString)
   }
 
@@ -186,7 +195,9 @@ private[spark] trait RpcEnvFileServer {
 
   /** Validates and normalizes the base URI for directories. */
   protected def validateDirectoryUri(baseUri: String): String = {
+    // 将目录的前后"/"去除，然后在前面加上"/"
     val fixedBaseUri = "/" + baseUri.stripPrefix("/").stripSuffix("/")
+    // 目录不可是/files或/jars，否则抛出异常
     require(fixedBaseUri != "/files" && fixedBaseUri != "/jars",
       "Directory URI cannot be /files nor /jars.")
     fixedBaseUri

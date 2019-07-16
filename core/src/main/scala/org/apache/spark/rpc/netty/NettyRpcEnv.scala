@@ -46,18 +46,24 @@ private[netty] class NettyRpcEnv(
     host: String,
     securityManager: SecurityManager) extends RpcEnv(conf) with Logging {
 
+  // 创建TransportConf
   private[netty] val transportConf = SparkTransportConf.fromSparkConf(
+    // 对SparkConf进行克隆，并设置spark.rpc.io.numConnectionsPerPeer为1，用于指定对等节点间的连接数
     conf.clone.set("spark.rpc.io.numConnectionsPerPeer", "1"),
-    "rpc",
-    conf.getInt("spark.rpc.io.threads", 0))
+    "rpc", // 模块名为rpc
+    conf.getInt("spark.rpc.io.threads", 0)) // 设置Netty传输线程数
 
+  // 消息调度器
   private val dispatcher: Dispatcher = new Dispatcher(this)
 
+  // 创建流管理器
   private val streamManager = new NettyStreamManager(this)
 
+  // 创建TransportContext
   private val transportContext = new TransportContext(transportConf,
     new NettyRpcHandler(dispatcher, this, streamManager))
 
+  // 创建TransportClientBootstrap
   private def createClientBootstraps(): java.util.List[TransportClientBootstrap] = {
     if (securityManager.isAuthenticationEnabled()) {
       java.util.Arrays.asList(new SaslClientBootstrap(transportConf, "", securityManager,
@@ -67,6 +73,7 @@ private[netty] class NettyRpcEnv(
     }
   }
 
+  // 创建TransportClientFactory工厂，用于常规的发送请求和接收响应
   private val clientFactory = transportContext.createClientFactory(createClientBootstraps())
 
   /**
@@ -76,18 +83,26 @@ private[netty] class NettyRpcEnv(
    *
    * It also allows for different configuration of certain properties, such as the number of
    * connections per peer.
+    *
+    * 该TransportClientFactory用于文件下载
    */
   @volatile private var fileDownloadFactory: TransportClientFactory = _
 
+  // 用于处理请求超时的调度器
   val timeoutScheduler = ThreadUtils.newDaemonSingleThreadScheduledExecutor("netty-rpc-env-timeout")
 
   // Because TransportClientFactory.createClient is blocking, we need to run it in this thread pool
   // to implement non-blocking send/ask.
   // TODO: a non-blocking TransportClientFactory.createClient in future
+  /**
+    * 用于异步处理TransportClientFactory.createClient()方法调用的线程池。
+    * 线程池的大小默认为64，可以使用spark.rpc.connect.threads属性进行配置。
+    */
   private[netty] val clientConnectionExecutor = ThreadUtils.newDaemonCachedThreadPool(
     "netty-rpc-connection",
     conf.getInt("spark.rpc.connect.threads", 64))
 
+  // TransportServer
   @volatile private var server: TransportServer = _
 
   private val stopped = new AtomicBoolean(false)
@@ -95,6 +110,8 @@ private[netty] class NettyRpcEnv(
   /**
    * A map for [[RpcAddress]] and [[Outbox]]. When we are connecting to a remote [[RpcAddress]],
    * we just put messages to its [[Outbox]] to implement a non-blocking `send` method.
+    * RpcAddress与Outbox的映射关系的缓存。
+    * 每次向远端发送请求时，此请求消息首先放入此远端地址对应的Outbox，然后使用线程异步发送。
    */
   private val outboxes = new ConcurrentHashMap[RpcAddress, Outbox]()
 
@@ -108,16 +125,20 @@ private[netty] class NettyRpcEnv(
     }
   }
 
+  // 创建TransportServer
   def startServer(bindAddress: String, port: Int): Unit = {
+    // 先创建TransportServerBootstrap列表
     val bootstraps: java.util.List[TransportServerBootstrap] =
       if (securityManager.isAuthenticationEnabled()) {
         java.util.Arrays.asList(new SaslServerBootstrap(transportConf, securityManager))
       } else {
         java.util.Collections.emptyList()
       }
+    // 创建TransportServer
     server = transportContext.createServer(bindAddress, port, bootstraps)
-    dispatcher.registerRpcEndpoint(
-      RpcEndpointVerifier.NAME, new RpcEndpointVerifier(this, dispatcher))
+    // 向Dispatcher注册RpcEndpointVerifier，注册名为endpoint-verifier。
+    dispatcher.registerRpcEndpoint(RpcEndpointVerifier.NAME, // endpoint-verifier
+      new RpcEndpointVerifier(this, dispatcher)) // RpcEndpointVerifier用于校验指定名称的RpcEndpoint是否存在。
   }
 
   @Nullable
@@ -125,19 +146,27 @@ private[netty] class NettyRpcEnv(
     if (server != null) RpcAddress(host, server.getPort()) else null
   }
 
+  // 设置RpcEndpoint
   override def setupEndpoint(name: String, endpoint: RpcEndpoint): RpcEndpointRef = {
+    // 使用Dispatcher注册RpcEndpoint
     dispatcher.registerRpcEndpoint(name, endpoint)
   }
 
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
+    // 得到RpcEndpointAddress对象
     val addr = RpcEndpointAddress(uri)
+    // 构建NettyRpcEndpointRef
     val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
+    // 获取远端NettyRpcEnv的RpcEndpointVerifier
     val verifier = new NettyRpcEndpointRef(
       conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
+    // 使用ask方法进行询问，向远端NettyRpcEnv的RpcEndpointVerifier发送RpcEndpointVerifier.CheckExistence消息
     verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
       if (find) {
+        // 能够查询到
         Future.successful(endpointRef)
       } else {
+        // 没有查询到
         Future.failed(new RpcEndpointNotFoundException(uri))
       }
     }(ThreadUtils.sameThread)
@@ -145,18 +174,22 @@ private[netty] class NettyRpcEnv(
 
   override def stop(endpointRef: RpcEndpointRef): Unit = {
     require(endpointRef.isInstanceOf[NettyRpcEndpointRef])
+    // 停止Dispatcher，对对应的RpcEndpoint取消注册
     dispatcher.stop(endpointRef)
   }
 
+  // 向远端RpcEndpoint发送消息
   private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage): Unit = {
-    if (receiver.client != null) {
+    if (receiver.client != null) { // 消息对应的TransportClient存在，直接发送
       message.sendWith(receiver.client)
-    } else {
+    } else { // TransportClient不存在
       require(receiver.address != null,
         "Cannot send message to client endpoint with no listen address.")
       val targetOutbox = {
+        // 获取远端RpcEndpoint对应的Outbox
         val outbox = outboxes.get(receiver.address)
-        if (outbox == null) {
+        if (outbox == null) { // Outbox为空
+          // 新建一个Outbox并添加到outboxes字典中
           val newOutbox = new Outbox(this, receiver.address)
           val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
           if (oldOutbox == null) {
@@ -168,45 +201,60 @@ private[netty] class NettyRpcEnv(
           outbox
         }
       }
-      if (stopped.get) {
+      if (stopped.get) { // 如果当前RpcEndpoint处于停止状态
         // It's possible that we put `targetOutbox` after stopping. So we need to clean it.
+        // 则从outboxes移除对应的的消息接受者的Outbox
         outboxes.remove(receiver.address)
+        // 停止该Outbox
         targetOutbox.stop()
       } else {
+        // 否则使用Outbox的send()方法发送消息
         targetOutbox.send(message)
       }
     }
   }
 
+  // 发送消息
   private[netty] def send(message: RequestMessage): Unit = {
+    // 获取消息的接收者地址
     val remoteAddr = message.receiver.address
     if (remoteAddr == address) {
+      // 接收者地址与当前NettyRpcEnv的地址相同，说明处理请求的RpcEndpoint位于本地的NettyRpcEnv中
       // Message to a local RPC endpoint.
       try {
+        // 由Dispatcher的postOneWayMessage()方法发送
         dispatcher.postOneWayMessage(message)
       } catch {
         case e: RpcEnvStoppedException => logWarning(e.getMessage)
       }
     } else {
+      // 请求消息的接收者的地址与当前NettyRpcEnv的地址不同
       // Message to a remote RPC endpoint.
+      // 将message序列化，封装为OneWayOutboxMessage类型的消息，调用postToOutbox()方法将消息投递出去。
       postToOutbox(message.receiver, OneWayOutboxMessage(serialize(message)))
     }
   }
 
   private[netty] def createClient(address: RpcAddress): TransportClient = {
+    // 创建TransportClient
     clientFactory.createClient(address.host, address.port)
   }
 
+  // 询问方法
   private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout): Future[T] = {
     val promise = Promise[Any]()
+
+    // 获取消息的接收者地址
     val remoteAddr = message.receiver.address
 
+    // 失败回调
     def onFailure(e: Throwable): Unit = {
       if (!promise.tryFailure(e)) {
         logWarning(s"Ignored failure: $e")
       }
     }
 
+    // 成功回调
     def onSuccess(reply: Any): Unit = reply match {
       case RpcFailure(e) => onFailure(e)
       case rpcReply =>
@@ -217,28 +265,38 @@ private[netty] class NettyRpcEnv(
 
     try {
       if (remoteAddr == address) {
+        // 接收者地址与当前NettyRpcEnv的地址相同，说明处理请求的RpcEndpoint位于本地的NettyRpcEnv中
+        // 构造Promise对象
         val p = Promise[Any]()
         p.future.onComplete {
           case Success(response) => onSuccess(response)
           case Failure(e) => onFailure(e)
         }(ThreadUtils.sameThread)
+        // 调用Dispatcher的postLocalMessage()方法投递消息
         dispatcher.postLocalMessage(message, p)
       } else {
+        // 接收者地址与当前NettyRpcEnv的地址不同，说明处理请求的RpcEndpoint位于其他节点的NettyRpcEnv中
+        // 序列化消息数据，构造为RpcOutboxMessage对象，传递的失败和成功的回调都定义在上面
         val rpcMessage = RpcOutboxMessage(serialize(message),
           onFailure,
           (client, response) => onSuccess(deserialize[Any](client, response)))
+        // 投递消息
         postToOutbox(message.receiver, rpcMessage)
+        // 超时
         promise.future.onFailure {
           case _: TimeoutException => rpcMessage.onTimeout()
           case _ =>
         }(ThreadUtils.sameThread)
       }
 
+      // 使用timeoutScheduler设置一个定时器，用于超时处理。此定时器在等待指定的超时时间后将抛出TimeoutException异常。
       val timeoutCancelable = timeoutScheduler.schedule(new Runnable {
         override def run(): Unit = {
           onFailure(new TimeoutException(s"Cannot receive any reply in ${timeout.duration}"))
         }
       }, timeout.duration.toNanos, TimeUnit.NANOSECONDS)
+
+      // 请求如果在超时时间内处理完毕，则会调用timeoutScheduler的cancel方法取消timeoutCancelable超时定时器。
       promise.future.onComplete { v =>
         timeoutCancelable.cancel(true)
       }(ThreadUtils.sameThread)
@@ -261,6 +319,7 @@ private[netty] class NettyRpcEnv(
     }
   }
 
+  // 根据RpcEndpoint获取对应的RpcEndpointRef
   override def endpointRef(endpoint: RpcEndpoint): RpcEndpointRef = {
     dispatcher.getRpcEndpointRef(endpoint)
   }
@@ -339,9 +398,12 @@ private[netty] class NettyRpcEnv(
       if (fileDownloadFactory == null) {
         val module = "files"
         val prefix = "spark.rpc.io."
+
+        // 克隆一份SparkConf
         val clone = conf.clone()
 
         // Copy any RPC configuration that is not overridden in the spark.files namespace.
+        // 检查file模块一些有关RPC的配置是否缺失了，如果是将设置到克隆的SparkConf中
         conf.getAll.foreach { case (key, value) =>
           if (key.startsWith(prefix)) {
             val opt = key.substring(prefix.length())
@@ -349,9 +411,13 @@ private[netty] class NettyRpcEnv(
           }
         }
 
+        // 文件下载的IO线程数
         val ioThreads = clone.getInt("spark.files.io.threads", 1)
+        // 创建TransportConf
         val downloadConf = SparkTransportConf.fromSparkConf(clone, module, ioThreads)
+        // 创建TransportContext
         val downloadContext = new TransportContext(downloadConf, new NoOpRpcHandler(), true)
+        // 创建用于文件下载的TransportClientFactory
         fileDownloadFactory = downloadContext.createClientFactory(createClientBootstraps())
       }
     }
@@ -432,21 +498,28 @@ private[netty] object NettyRpcEnv extends Logging {
 
 private[rpc] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
 
+  // 创建NettyRpcEnv
   def create(config: RpcEnvConfig): RpcEnv = {
+    // 创建序列化器
     val sparkConf = config.conf
     // Use JavaSerializerInstance in multiple threads is safe. However, if we plan to support
     // KryoSerializer in future, we have to use ThreadLocal to store SerializerInstance
     val javaSerializerInstance =
       new JavaSerializer(sparkConf).newInstance().asInstanceOf[JavaSerializerInstance]
+    // 通过序列化器、监听地址、安全管理器等构造NettyRpcEnv
     val nettyEnv =
       new NettyRpcEnv(sparkConf, javaSerializerInstance, config.advertiseAddress,
         config.securityManager)
-    if (!config.clientMode) {
+    if (!config.clientMode) { // 如果是Driver
+      // 定义启动RpcEnv的偏函数，该偏函数中会创建TransportServer
       val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
+        // 调用NettyRpcEnv的startServer()，这里会创建TransportServer
         nettyEnv.startServer(config.bindAddress, actualPort)
+        // 返回NettyRpcEnv和端口
         (nettyEnv, nettyEnv.address.port)
       }
       try {
+        // 在指定端口启动NettyRpcEnv
         Utils.startServiceOnPort(config.port, startNettyRpcEnv, sparkConf, config.name)._1
       } catch {
         case NonFatal(e) =>
@@ -454,6 +527,7 @@ private[rpc] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
           throw e
       }
     }
+    // 返回NettyRpcEnv
     nettyEnv
   }
 }
@@ -484,9 +558,12 @@ private[netty] class NettyRpcEndpointRef(
     @transient @volatile private var nettyEnv: NettyRpcEnv)
   extends RpcEndpointRef(conf) with Serializable with Logging {
 
+  // 类型为TransportClient。NettyRpcEndpointRef将利用此TransportClient向远端的RpcEndpoint发送请求。
   @transient @volatile var client: TransportClient = _
 
+  // 远端RpcEndpoint的地址RpcEndpointAddress。
   private val _address = if (endpointAddress.rpcAddress != null) endpointAddress else null
+  // 远端RpcEndpoint的名称。
   private val _name = endpointAddress.name
 
   override def address: RpcAddress = if (_address != null) _address.rpcAddress else null
@@ -503,10 +580,12 @@ private[netty] class NettyRpcEndpointRef(
 
   override def name: String = _name
 
+  // 首先将message封装为RequestMessage，然后调用NettyRpcEnv的ask方法。
   override def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
     nettyEnv.ask(RequestMessage(nettyEnv.address, this, message), timeout)
   }
 
+  // 首先将message封装为RequestMessage，然后调用NettyRpcEnv的send方法。
   override def send(message: Any): Unit = {
     require(message != null, "Message is null")
     nettyEnv.send(RequestMessage(nettyEnv.address, this, message))
@@ -555,14 +634,25 @@ private[netty] class NettyRpcHandler(
   // A variable to track the remote RpcEnv addresses of all clients
   private val remoteAddresses = new ConcurrentHashMap[RpcAddress, RpcAddress]()
 
+  /**
+    * @param client A channel client which enables the handler to make requests back to the sender
+    *               of this RPC. This will always be the exact same object for a particular channel.
+    *               发送消息的TransportClient
+    * @param message The serialized bytes of the RPC. 消息序列化后的数据
+    * @param callback Callback which should be invoked exactly once upon success or failure of the RPC
+    *                 用于对请求处理结束后进行回调，无论处理结果是成功还是失败，该回调都会被调用一次
+    */
   override def receive(
       client: TransportClient,
       message: ByteBuffer,
       callback: RpcResponseCallback): Unit = {
+    // 转换消息数据为RequestMessage对象
     val messageToDispatch = internalReceive(client, message)
+    // 将消息投递到Dispatcher中对应的Inbox中
     dispatcher.postRemoteMessage(messageToDispatch, callback)
   }
 
+  // 无需回复的消息
   override def receive(
       client: TransportClient,
       message: ByteBuffer): Unit = {
@@ -570,19 +660,30 @@ private[netty] class NettyRpcHandler(
     dispatcher.postOneWayMessage(messageToDispatch)
   }
 
+  // 转换消息数据为RequestMessage对象
   private def internalReceive(client: TransportClient, message: ByteBuffer): RequestMessage = {
+    // 获取发送消息的TransportClient的InetSocketAddress，并构造为远端Client地址对象RpcAddress
     val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
     assert(addr != null)
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+    // 反序列化消息为RequestMessage对象
     val requestMessage = nettyEnv.deserialize[RequestMessage](client, message)
+    // 检查远端Server地址是否为空
     if (requestMessage.senderAddress == null) {
       // Create a new message with the socket address of the client as the sender.
+      // 远端Server地址为空，重新构造一个RequestMessage对象，远端Server地址是TransportClient的Socket地址
       RequestMessage(clientAddr, requestMessage.receiver, requestMessage.content)
-    } else {
+    } else { // 远端Server地址不为空
       // The remote RpcEnv listens to some port, we should also fire a RemoteProcessConnected for
       // the listening address
       val remoteEnvAddress = requestMessage.senderAddress
+      /**
+        * 将远端节点的地址信息存入remoteAddresses字典
+        *   - 键为保存远端节点Client的host和port的RpcAddress实例
+        *   - 值为保存远端节点server的host和port的RpcAddress实例
+        */
       if (remoteAddresses.putIfAbsent(clientAddr, remoteEnvAddress) == null) {
+        // put后返回为null即表示成功，说明这是首次与该地址通信，则向Dispatcher投递RemoteProcessConnected事件
         dispatcher.postToAll(RemoteProcessConnected(remoteEnvAddress))
       }
       requestMessage
@@ -595,11 +696,13 @@ private[netty] class NettyRpcHandler(
     val addr = client.getChannel.remoteAddress().asInstanceOf[InetSocketAddress]
     if (addr != null) {
       val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+      // 投递RemoteProcessConnectionError事件，包含的是远端Client地址
       dispatcher.postToAll(RemoteProcessConnectionError(cause, clientAddr))
       // If the remove RpcEnv listens to some address, we should also fire a
       // RemoteProcessConnectionError for the remote RpcEnv listening address
       val remoteEnvAddress = remoteAddresses.get(clientAddr)
       if (remoteEnvAddress != null) {
+        // 投递RemoteProcessConnectionError事件，包含的是远端Server地址
         dispatcher.postToAll(RemoteProcessConnectionError(cause, remoteEnvAddress))
       }
     } else {
@@ -610,23 +713,30 @@ private[netty] class NettyRpcHandler(
     }
   }
 
+  // Channel激活时调用
   override def channelActive(client: TransportClient): Unit = {
     val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
     assert(addr != null)
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+    // 投递RemoteProcessConnected消息，包含的是远端Client地址
     dispatcher.postToAll(RemoteProcessConnected(clientAddr))
   }
 
+  // Channel断开连接时调用；在当远端Client与本当前RPC环境断开连接时，还需要断开当前RPC环境到远端Server的连接
   override def channelInactive(client: TransportClient): Unit = {
     val addr = client.getChannel.remoteAddress().asInstanceOf[InetSocketAddress]
     if (addr != null) {
       val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+      // 移除对应的Outbox
       nettyEnv.removeOutbox(clientAddr)
+      // 投递RemoteProcessDisconnected消息，包含的是远端Client地址
       dispatcher.postToAll(RemoteProcessDisconnected(clientAddr))
+      // 从remoteAddresses中移除
       val remoteEnvAddress = remoteAddresses.remove(clientAddr)
       // If the remove RpcEnv listens to some address, we should also  fire a
       // RemoteProcessDisconnected for the remote RpcEnv listening address
       if (remoteEnvAddress != null) {
+        // 投递RemoteProcessDisconnected消息，包含的是远端Server地址
         dispatcher.postToAll(RemoteProcessDisconnected(remoteEnvAddress))
       }
     } else {

@@ -39,25 +39,34 @@ import org.apache.spark.util.Utils
 private[netty] class NettyStreamManager(rpcEnv: NettyRpcEnv)
   extends StreamManager with RpcEnvFileServer {
 
+  // 提供了对下面三类文件的下载支持
+  // 普通文件
   private val files = new ConcurrentHashMap[String, File]()
+  // jar文件
   private val jars = new ConcurrentHashMap[String, File]()
+  // 目录
   private val dirs = new ConcurrentHashMap[String, File]()
 
+  // 对获取文件块不支持
   override def getChunk(streamId: Long, chunkIndex: Int): ManagedBuffer = {
     throw new UnsupportedOperationException()
   }
 
+  // 打开文件流
   override def openStream(streamId: String): ManagedBuffer = {
+    // 移除前面的"/"，然后以"/"切分为两份，前一份为文件类型，后一份为文件名
     val Array(ftype, fname) = streamId.stripPrefix("/").split("/", 2)
     val file = ftype match {
-      case "files" => files.get(fname)
-      case "jars" => jars.get(fname)
-      case other =>
+      case "files" => files.get(fname) // 普通文件，直接返回
+      case "jars" => jars.get(fname) // jar文件，直接返回
+      case other => // 其他，说明是目录
         val dir = dirs.get(ftype)
         require(dir != null, s"Invalid stream URI: $ftype not found.")
+        // 构造File返回
         new File(dir, fname)
     }
 
+    // 为文件构建FileSegmentManagedBuffer流
     if (file != null && file.isFile()) {
       new FileSegmentManagedBuffer(rpcEnv.transportConf, file, 0, file.length())
     } else {
@@ -65,7 +74,9 @@ private[netty] class NettyStreamManager(rpcEnv: NettyRpcEnv)
     }
   }
 
+  // 添加普通文件
   override def addFile(file: File): String = {
+    // 直接添加，如果已经存在相同的文件则会抛出IllegalArgumentException异常
     val existingPath = files.putIfAbsent(file.getName, file)
     require(existingPath == null || existingPath == file,
       s"File ${file.getName} was already registered with a different path " +
@@ -73,7 +84,9 @@ private[netty] class NettyStreamManager(rpcEnv: NettyRpcEnv)
     s"${rpcEnv.address.toSparkURL}/files/${Utils.encodeFileNameToURIRawPath(file.getName())}"
   }
 
+  // 添加Jar文件
   override def addJar(file: File): String = {
+    // 直接添加，如果已经存在相同的文件则会抛出IllegalArgumentException异常
     val existingPath = jars.putIfAbsent(file.getName, file)
     require(existingPath == null || existingPath == file,
       s"File ${file.getName} was already registered with a different path " +
@@ -81,8 +94,11 @@ private[netty] class NettyStreamManager(rpcEnv: NettyRpcEnv)
     s"${rpcEnv.address.toSparkURL}/jars/${Utils.encodeFileNameToURIRawPath(file.getName())}"
   }
 
+  // 添加目录
   override def addDirectory(baseUri: String, path: File): String = {
+    // 验证目录的URI，不能是/files或/jars，否则抛出IllegalArgumentException异常
     val fixedBaseUri = validateDirectoryUri(baseUri)
+    // 去掉前面的"/"后再添加，如果已经存在会抛出IllegalArgumentException异常
     require(dirs.putIfAbsent(fixedBaseUri.stripPrefix("/"), path) == null,
       s"URI '$fixedBaseUri' already registered.")
     s"${rpcEnv.address.toSparkURL}$fixedBaseUri"

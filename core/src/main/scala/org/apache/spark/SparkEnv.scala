@@ -241,6 +241,7 @@ object SparkEnv extends Logging {
       assert(listenerBus != null, "Attempted to create driver SparkEnv with null listener bus!")
     }
 
+    // 安全管理器
     val securityManager = new SecurityManager(conf, ioEncryptionKey)
     ioEncryptionKey.foreach { _ =>
       if (!securityManager.isSaslEncryptionEnabled()) {
@@ -249,7 +250,14 @@ object SparkEnv extends Logging {
       }
     }
 
+    // RpcEnv
+    /**
+      * 生成系统名称：
+      *   - 如果当前应用为Driver（即SparkEnv位于Driver中），那么systemName为sparkDriver；
+      *   - 否则（即SparkEnv位于Executor中），systemName为sparkExecutor。
+      */
     val systemName = if (isDriver) driverSystemName else executorSystemName
+    // 创建RpcEnv，注意最后一个参数，只有在当前Executor不是Driver的时候才为true
     val rpcEnv = RpcEnv.create(systemName, bindAddress, advertiseAddress, port, conf,
       securityManager, clientMode = !isDriver)
 
