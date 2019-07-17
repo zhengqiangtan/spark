@@ -30,32 +30,42 @@ private[spark] class BroadcastManager(
     securityManager: SecurityManager)
   extends Logging {
 
+  // BroadcastManager是否初始化完成的状态。
   private var initialized = false
+  // 广播工厂实例
   private var broadcastFactory: BroadcastFactory = null
 
+  // 初始化时会调用该方法
   initialize()
 
   // Called by SparkContext or Executor before using Broadcast
   private def initialize() {
     synchronized {
-      if (!initialized) {
+      if (!initialized) { // 判断是否已经初始化了
+        // 创建广播工厂
         broadcastFactory = new TorrentBroadcastFactory
+        // 使用广播工厂进行初始化
         broadcastFactory.initialize(isDriver, conf, securityManager)
+        // 标记状态
         initialized = true
       }
     }
   }
 
   def stop() {
+    // 停止广播工厂
     broadcastFactory.stop()
   }
 
+  // 下一个广播对象的广播ID，类型为AtomicLong。
   private val nextBroadcastId = new AtomicLong(0)
 
+  // 创建新的广播
   def newBroadcast[T: ClassTag](value_ : T, isLocal: Boolean): Broadcast[T] = {
     broadcastFactory.newBroadcast[T](value_, isLocal, nextBroadcastId.getAndIncrement())
   }
 
+  // 根据ID移除广播
   def unbroadcast(id: Long, removeFromDriver: Boolean, blocking: Boolean) {
     broadcastFactory.unbroadcast(id, removeFromDriver, blocking)
   }

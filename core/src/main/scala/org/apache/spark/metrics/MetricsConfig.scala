@@ -34,9 +34,12 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   private val INSTANCE_REGEX = "^(\\*|[a-zA-Z]+)\\.(.+)".r
   private val DEFAULT_METRICS_CONF_FILENAME = "metrics.properties"
 
+  // 度量的属性信息。
   private[metrics] val properties = new Properties()
+  // 每个实例的子属性。缓存每个实例与其属性的映射关系。
   private[metrics] var perInstanceSubProperties: mutable.HashMap[String, Properties] = null
 
+  // 用于给MetricsConfig的properties中添加默认的度量属性。
   private def setDefaultProperties(prop: Properties) {
     prop.setProperty("*.sink.servlet.class", "org.apache.spark.metrics.sink.MetricsServlet")
     prop.setProperty("*.sink.servlet.path", "/metrics/json")
@@ -47,17 +50,23 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   /**
    * Load properties from various places, based on precedence
    * If the same property is set again latter on in the method, it overwrites the previous value
+    *
+    * 初始化方法
    */
   def initialize() {
     // Add default properties in case there's no properties file
+    // 设置默认属性
     setDefaultProperties(properties)
 
+    // 从文件中加载度量属性
     loadPropertiesFromFile(conf.getOption("spark.metrics.conf"))
 
     // Also look for the properties in provided Spark configuration
+    // 从SparkConf中查找以"spark.metrics.conf."为前缀的属性
     val prefix = "spark.metrics.conf."
     conf.getAll.foreach {
       case (k, v) if k.startsWith(prefix) =>
+        // 截取前缀之后的部分作为键，添加到properties中
         properties.setProperty(k.substring(prefix.length()), v)
       case _ =>
     }
@@ -72,9 +81,10 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
     // ("driver"->Map("path"->"driver_path", "class"->"default_class")
     // Note how class got added to based on the default property, but path remained the same
     // since "driver.path" already existed and took precedence over "*.path"
-    //
+    // 提取实例的属性，正则为"^(\\*|[a-zA-Z]+)\\.(.+)"
     perInstanceSubProperties = subProperties(properties, INSTANCE_REGEX)
     if (perInstanceSubProperties.contains(DEFAULT_PREFIX)) {
+      // 向子属性中添加缺失的默认子属性（所谓默认子属性，即在Map中以*为key的属性）。
       val defaultSubProperties = perInstanceSubProperties(DEFAULT_PREFIX).asScala
       for ((instance, prop) <- perInstanceSubProperties if (instance != DEFAULT_PREFIX);
            (k, v) <- defaultSubProperties if (prop.get(k) == null)) {
@@ -98,6 +108,8 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
    * the returned Map would contain one key-value pair
    * Map("*" -> Properties("sink.servlet.class" -> "class1"))
    * Any passed in properties, not complying with the regex are ignored.
+    *
+    * 通过正则表达式匹配找出键值对的键的前缀和后缀
    *
    * @param prop the flat list of properties to "unflatten" based on prefixes
    * @param regex the regex that the prefix has to comply with
@@ -105,15 +117,19 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
    */
   def subProperties(prop: Properties, regex: Regex): mutable.HashMap[String, Properties] = {
     val subProperties = new mutable.HashMap[String, Properties]
+    // 遍历所有的属性
     prop.asScala.foreach { kv =>
+      // 进行正则匹配
       if (regex.findPrefixOf(kv._1.toString).isDefined) {
         val regex(prefix, suffix) = kv._1.toString
+        // 键的前缀作为键，新的Properties对象为值存入subProperties，并将键的后缀作为值、原值为值存入该新的Properties
         subProperties.getOrElseUpdate(prefix, new Properties).setProperty(suffix, kv._2.toString)
       }
     }
     subProperties
   }
 
+  // 获取指定实例的Properties属性对象
   def getInstance(inst: String): Properties = {
     perInstanceSubProperties.get(inst) match {
       case Some(s) => s
@@ -124,16 +140,23 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   /**
    * Loads configuration from a config file. If no config file is provided, try to get file
    * in class path.
+    *
+    * 用于给MetricsConfig的properties中添加从指定文件中加载的度量属性。
    */
   private[this] def loadPropertiesFromFile(path: Option[String]): Unit = {
     var is: InputStream = null
     try {
       is = path match {
         case Some(f) => new FileInputStream(f)
+        /**
+          * 如果没有指定度量属性文件或者此文件不存在，
+          * 那么将从类路径下的属性文件metrics.properties中加载度量属性。
+          */
         case None => Utils.getSparkClassLoader.getResourceAsStream(DEFAULT_METRICS_CONF_FILENAME)
       }
 
       if (is != null) {
+        // 直接从文件输入流load
         properties.load(is)
       }
     } catch {

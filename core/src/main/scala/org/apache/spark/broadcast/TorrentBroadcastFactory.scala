@@ -31,6 +31,7 @@ private[spark] class TorrentBroadcastFactory extends BroadcastFactory {
   override def initialize(isDriver: Boolean, conf: SparkConf, securityMgr: SecurityManager) { }
 
   override def newBroadcast[T: ClassTag](value_ : T, isLocal: Boolean, id: Long): Broadcast[T] = {
+    // 构造TorrentBroadcast实例，传入了广播的值和ID
     new TorrentBroadcast[T](value_, id)
   }
 
@@ -42,6 +43,7 @@ private[spark] class TorrentBroadcastFactory extends BroadcastFactory {
    * @param blocking Whether to block until unbroadcasted
    */
   override def unbroadcast(id: Long, removeFromDriver: Boolean, blocking: Boolean) {
+    // 对由id标记的广播对象去持久化
     TorrentBroadcast.unpersist(id, removeFromDriver, blocking)
   }
 }

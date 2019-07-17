@@ -556,30 +556,39 @@ private[spark] class BlockManager(
    * multiple block managers can share the same host.
    */
   private def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
+    // 使用BlockManagerMaster的getLocations()进行获取并对位置进行"洗牌"避免热点
     val locs = Random.shuffle(master.getLocations(blockId))
+    // 将位置分为"优先位置"和"其他位置"，"优先位置"表示对应的块在BlockManager节点上
     val (preferredLocs, otherLocs) = locs.partition { loc => blockManagerId.host == loc.host }
+    // 返回位置集合，"优先位置"在前面
     preferredLocs ++ otherLocs
   }
 
   /**
    * Get block from remote block managers as serialized bytes.
+    * 从远程的BlockManager中获取数据块
    */
   def getRemoteBytes(blockId: BlockId): Option[ChunkedByteBuffer] = {
     logDebug(s"Getting remote block $blockId")
     require(blockId != null, "BlockId is null")
     var runningFailureCount = 0
     var totalFailureCount = 0
+    // 根据blockId获取远程位置集合
     val locations = getLocations(blockId)
+    // 最大可重试次数
     val maxFetchFailures = locations.size
+    // 遍历Block块的位置集合
     var locationIterator = locations.iterator
     while (locationIterator.hasNext) {
       val loc = locationIterator.next()
       logDebug(s"Getting remote block $blockId from $loc")
       val data = try {
+        // 尝试获取
         blockTransferService.fetchBlockSync(
           loc.host, loc.port, loc.executorId, blockId.toString).nioByteBuffer()
       } catch {
         case NonFatal(e) =>
+          // 检查重试次数是否过多
           runningFailureCount += 1
           totalFailureCount += 1
 
@@ -599,6 +608,10 @@ private[spark] class BlockManager(
           // large number of stale entries causing a large number of retries that may
           // take a significant amount of time. To get rid of these stale entries
           // we refresh the block locations after a certain number of fetch failures
+          /**
+            * 如果重试失败次数大于spark.block.failures.beforeLocationRefresh参数指定的次数，默认5次
+            * 说明可能对应的数据位置发生了改变，需要重新刷新一下数据位置
+            */
           if (runningFailureCount >= maxFailuresBeforeLocationRefresh) {
             locationIterator = getLocations(blockId).iterator
             logDebug(s"Refreshed locations from the driver " +
@@ -610,7 +623,7 @@ private[spark] class BlockManager(
           null
       }
 
-      if (data != null) {
+      if (data != null) { // 获取成功，将数据包装为ChunkedByteBuffer对象后返回
         return Some(new ChunkedByteBuffer(data))
       }
       logDebug(s"The value of block $blockId is null")

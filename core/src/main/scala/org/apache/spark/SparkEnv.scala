@@ -69,13 +69,20 @@ class SparkEnv (
     val outputCommitCoordinator: OutputCommitCoordinator,
     val conf: SparkConf) extends Logging {
 
+  // 标识当前SparkEnv是否停止的状态
   private[spark] var isStopped = false
+  // 所有python实现的Worker的缓存
   private val pythonWorkers = mutable.HashMap[(String, Map[String, String]), PythonWorkerFactory]()
 
   // A general, soft-reference map for metadata needed during HadoopRDD split computation
   // (e.g., HadoopFileRDD uses this to cache JobConfs and InputFormats).
+  /**
+    * HadoopRDD进行任务切分时所需要的元数据的软引用。
+    * 例如，HadoopFileRDD将使用hadoopJobMetadata缓存JobConf和InputFormat。
+    */
   private[spark] val hadoopJobMetadata = new MapMaker().softValues().makeMap[String, Any]()
 
+  // 如果当前SparkEnv处于Driver实例中，那么将创建Driver的临时目录。
   private[spark] var driverTmpDir: Option[String] = None
 
   private[spark] def stop() {
@@ -297,97 +304,141 @@ object SparkEnv extends Logging {
       instantiateClass[T](conf.get(propertyName, defaultClassName))
     }
 
+    // 创建序列化管理器
     val serializer = instantiateClassFromConf[Serializer](
       "spark.serializer", "org.apache.spark.serializer.JavaSerializer")
     logDebug(s"Using serializer: ${serializer.getClass}")
 
+    // 默认为org.apache.spark.serializer.JavaSerializer，通过spark.serializer配置
     val serializerManager = new SerializerManager(serializer, conf, ioEncryptionKey)
 
+    // 实际类型为org.apache.spark.serializer.JavaSerializer
     val closureSerializer = new JavaSerializer(conf)
 
-    def registerOrLookupEndpoint(
-        name: String, endpointCreator: => RpcEndpoint):
-      RpcEndpointRef = {
-      if (isDriver) {
+    // 注册RpcEndpoint或者查找RpcEndpoint
+    def registerOrLookupEndpoint(name: String, endpointCreator: => RpcEndpoint): RpcEndpointRef = {
+      if (isDriver) { // 如果是Driver
         logInfo("Registering " + name)
+        // 使用RpcEnv的方法进行注册
         rpcEnv.setupEndpoint(name, endpointCreator)
-      } else {
+      } else { // 如果是Executor
+        // 向远端Driver的NettyRpcEnv询问获取相关RpcEndpoint的RpcEndpointRef
         RpcUtils.makeDriverRef(name, conf, rpcEnv)
       }
     }
 
+    /**
+      * 创建广播管理器。
+      * 用于将配置信息和序列化后的RDD、Job及ShuffleDependency等信息在本地存储。
+      * 如果为了容灾，也会复制到其他节点上。
+      */
     val broadcastManager = new BroadcastManager(isDriver, conf, securityManager)
 
-    val mapOutputTracker = if (isDriver) {
+    // 创建Map任务输出跟踪器
+    val mapOutputTracker = if (isDriver) { // 如果是Driver，创建MapOutputTrackerMaster对象
       new MapOutputTrackerMaster(conf, broadcastManager, isLocal)
-    } else {
+    } else { // 如果是Executor，创建MapOutputTrackerWorker对象
       new MapOutputTrackerWorker(conf)
     }
 
     // Have to assign trackerEndpoint after initialization as MapOutputTrackerEndpoint
     // requires the MapOutputTracker itself
+    /**
+      * 如果当前应用程序是Driver，则创建MapOutputTrackerMasterEndpoint，
+      * 并且注册到Dispatcher中，注册名为MapOutputTracker。
+      * 如果当前应用程序是Executor，则从远端Driver实例的NettyRpcEnv的Dispatcher中
+      * 查找MapOutputTrackerMasterEndpoint的引用。
+      */
     mapOutputTracker.trackerEndpoint = registerOrLookupEndpoint(MapOutputTracker.ENDPOINT_NAME,
       new MapOutputTrackerMasterEndpoint(
         rpcEnv, mapOutputTracker.asInstanceOf[MapOutputTrackerMaster], conf))
 
     // Let the user specify short names for shuffle managers
+    // sort和tungsten-sort两种ShuffleManager的实现了都是SortShuffleManager
     val shortShuffleMgrNames = Map(
       "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
       "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
+    // 由参数spark.shuffle.manager来指定ShuffleManager，默认是SortShuffleManager
     val shuffleMgrName = conf.get("spark.shuffle.manager", "sort")
     val shuffleMgrClass = shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase, shuffleMgrName)
+
+    // 初始化ShuffleManager，利用反射机制创建
     val shuffleManager = instantiateClass[ShuffleManager](shuffleMgrClass)
 
+    // 是否使用旧的StaticMemoryManager，默认为fasle
     val useLegacyMemoryManager = conf.getBoolean("spark.memory.useLegacyMode", false)
     val memoryManager: MemoryManager =
       if (useLegacyMemoryManager) {
+        // StaticMemoryManager，静态内存管理器，每个内存区域的占比是固定的，是早期版本遗留的MemoryManager
         new StaticMemoryManager(conf, numUsableCores)
       } else {
+        // UnifiedMemoryManager，统一内存管理器，动态管理，每个内存区域的占比可以互相挤压调整
         UnifiedMemoryManager(conf, numUsableCores)
       }
 
-    val blockManagerPort = if (isDriver) {
-      conf.get(DRIVER_BLOCK_MANAGER_PORT)
-    } else {
-      conf.get(BLOCK_MANAGER_PORT)
+    // 块传输服务BlockTransferService对外提供的端口号
+    val blockManagerPort = if (isDriver) { // Driver
+      conf.get(DRIVER_BLOCK_MANAGER_PORT) // spark.driver.blockManager.port
+    } else { // Executor
+      conf.get(BLOCK_MANAGER_PORT) // spark.blockManager.port
     }
 
+    // 创建块传输服务
     val blockTransferService =
       new NettyBlockTransferService(conf, securityManager, bindAddress, advertiseAddress,
         blockManagerPort, numUsableCores)
 
+    /**
+      * 创建BlockManagerMaster，Driver和Executor都会持有一个BlockManagerMaster，
+      * 因此这个方法对不同的角色有不同的实现，会查找或注册BlockManagerMasterEndpoint：
+      *   - 当前应用程序是Driver，则创建BlockManagerMasterEndpoint，并且注册到Dispatcher中，注册名为BlockManagerMaster。
+      *   - 当前应用程序是Executor，则从远端Driver实例的NettyRpcEnv的Dispatcher中查找BlockManagerMasterEndpoint的引用。
+      */
     val blockManagerMaster = new BlockManagerMaster(registerOrLookupEndpoint(
       BlockManagerMaster.DRIVER_ENDPOINT_NAME,
       new BlockManagerMasterEndpoint(rpcEnv, isLocal, conf, listenerBus)),
       conf, isDriver)
 
     // NB: blockManager is not valid until initialize() is called later.
+    // 创建BlockManager
     val blockManager = new BlockManager(executorId, rpcEnv, blockManagerMaster,
       serializerManager, conf, memoryManager, mapOutputTracker, shuffleManager,
       blockTransferService, securityManager, numUsableCores)
 
-    val metricsSystem = if (isDriver) {
+    // 创建度量系统
+    val metricsSystem = if (isDriver) { // 当前为Driver
       // Don't start metrics system right now for Driver.
       // We need to wait for the task scheduler to give us an app ID.
       // Then we can start the metrics system.
+      // 仅创建，等待SparkContext中的任务调度器TaskScheculer告诉度量系统应用程序ID后再启动。
       MetricsSystem.createMetricsSystem("driver", conf, securityManager)
-    } else {
+    } else { // 当前为Executor
       // We need to set the executor ID before the MetricsSystem is created because sources and
       // sinks specified in the metrics configuration file will want to incorporate this executor's
       // ID into the metrics they report.
+      // 设置Executor的ID
       conf.set("spark.executor.id", executorId)
+      // 创建MetricsSystem并直接启动
       val ms = MetricsSystem.createMetricsSystem("executor", conf, securityManager)
       ms.start()
       ms
     }
 
+    // 创建输出提交协调器
     val outputCommitCoordinator = mockOutputCommitCoordinator.getOrElse {
       new OutputCommitCoordinator(conf, isDriver)
     }
+    /**
+      * 如果当前实例是Driver，则创建OutputCommitCoordinatorEndpoint，并且注册到Dispatcher中，注册名为OutputCommitCoordinator。
+      * 如果当前应用程序是Executor，则从远端Driver实例的NettyRpcEnv的Dispatcher中查找OutputCommitCoordinatorEndpoint的引用。
+      */
     val outputCommitCoordinatorRef = registerOrLookupEndpoint("OutputCommitCoordinator",
       new OutputCommitCoordinatorEndpoint(rpcEnv, outputCommitCoordinator))
+
+    // 将outputCommitCoordinatorRef关联到OutputCommitCoordinator实例上
     outputCommitCoordinator.coordinatorRef = Some(outputCommitCoordinatorRef)
 
+    // 创建SparkEnv对象
     val envInstance = new SparkEnv(
       executorId,
       rpcEnv,
@@ -407,8 +458,9 @@ object SparkEnv extends Logging {
     // Add a reference to tmp dir created by driver, we will delete this tmp dir when stop() is
     // called, and we only need to do it for driver. Because driver may run as a service, and if we
     // don't delete this tmp dir when sc is stopped, then will create too many tmp dirs.
-    if (isDriver) {
+    if (isDriver) { // 如果是Driver，将创建Driver的临时目录
       val sparkFilesDir = Utils.createTempDir(Utils.getLocalDir(conf), "userFiles").getAbsolutePath
+      // 使用driverTmpDir字段进行记录
       envInstance.driverTmpDir = Some(sparkFilesDir)
     }
 

@@ -52,23 +52,29 @@ private[spark] object CompressionCodec {
       || codec.isInstanceOf[LZ4CompressionCodec])
   }
 
+  // 内置支持的压缩编解码器
   private val shortCompressionCodecNames = Map(
     "lz4" -> classOf[LZ4CompressionCodec].getName,
     "lzf" -> classOf[LZFCompressionCodec].getName,
     "snappy" -> classOf[SnappyCompressionCodec].getName)
 
   def getCodecName(conf: SparkConf): String = {
+    // 使用spark.io.compression.codec参数获取，没有设置则默认为lz4
     conf.get(configKey, DEFAULT_COMPRESSION_CODEC)
   }
 
   def createCodec(conf: SparkConf): CompressionCodec = {
+    // 使用getCodecName()方法获取压缩编解码器的名字，然后创建
     createCodec(conf, getCodecName(conf))
   }
 
   def createCodec(conf: SparkConf, codecName: String): CompressionCodec = {
+    // 获取压缩编解码器的名称，内置支持lz4、lzf和snappy
     val codecClass = shortCompressionCodecNames.getOrElse(codecName.toLowerCase, codecName)
     val codec = try {
+      // 反射获取带有一个SparkConf参数的构造器
       val ctor = Utils.classForName(codecClass).getConstructor(classOf[SparkConf])
+      // 使用构造器进行创建
       Some(ctor.newInstance(conf).asInstanceOf[CompressionCodec])
     } catch {
       case e: ClassNotFoundException => None
