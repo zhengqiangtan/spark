@@ -34,7 +34,14 @@ import org.apache.spark.util.Utils
  * The [[org.apache.spark.storage.StorageLevel$]] singleton object contains some static constants
  * for commonly useful storage levels. To create your own storage level object, use the
  * factory method of the singleton object (`StorageLevel(...)`).
- */
+ *
+  * @param _useDisk 能否写入磁盘。当Block的StorageLevel中的_useDisk为true时，存储体系将允许Block写入磁盘。
+  * @param _useMemory 能否写入堆内存。当Block的StorageLevel中的_useMemory为true时，存储体系将允许Block写入堆内存。
+  * @param _useOffHeap 能否写入堆外内存。当Block的StorageLevel中的_useOffHeap为true时，存储体系将允许Block写入堆外内存。
+  * @param _deserialized 是否需要对Block反序列化。当Block本身经过了序列化后，Block的StorageLevel中的_deserialized将被设置为true，即可以对Block进行反序列化。
+  * @param _replication Block的复制份数。Block的StorageLevel中的_replication默认等于1，可以在构造Block的StorageLevel时明确指定_replication的数量。
+  *                     当_replication大于1时，Block除了在本地的存储体系中写入一份，还会复制到其他不同节点的存储体系中写入，达到复制备份的目的。
+  */
 @DeveloperApi
 class StorageLevel private(
     private var _useDisk: Boolean,
@@ -51,10 +58,15 @@ class StorageLevel private(
 
   def this() = this(false, true, false, false)  // For deserialization
 
+  // 能否写入磁盘。
   def useDisk: Boolean = _useDisk
+  // 能否写入堆内存。
   def useMemory: Boolean = _useMemory
+  // 能否写入堆外内存。
   def useOffHeap: Boolean = _useOffHeap
+  // 是否需要对Block反序列化。
   def deserialized: Boolean = _deserialized
+  // 复制份数。
   def replication: Int = _replication
 
   assert(replication < 40, "Replication restricted to be less than 40 for calculating hash codes")
@@ -63,6 +75,7 @@ class StorageLevel private(
     require(!deserialized, "Off-heap storage level does not support deserialized storage")
   }
 
+  // 内存模式。如果useOffHeap为true，则返回MemoryMode.OFF_HEAP，否则返回MemoryMode.ON_HEAP。
   private[spark] def memoryMode: MemoryMode = {
     if (useOffHeap) MemoryMode.OFF_HEAP
     else MemoryMode.ON_HEAP
@@ -83,30 +96,40 @@ class StorageLevel private(
       false
   }
 
+  // 当前的StorageLevel是否有效。
   def isValid: Boolean = (useMemory || useDisk) && (replication > 0)
 
+  /**
+    * 将当前StorageLevel转换为整型表示。
+    * 四位二进制位，每一位都表示是否开启对应的级别。
+    */
   def toInt: Int = {
     var ret = 0
-    if (_useDisk) {
+    if (_useDisk) { // 1000
       ret |= 8
     }
-    if (_useMemory) {
+    if (_useMemory) { // 0100
       ret |= 4
     }
-    if (_useOffHeap) {
+    if (_useOffHeap) { // 0010
       ret |= 2
     }
-    if (_deserialized) {
+    if (_deserialized) { // 0001
       ret |= 1
     }
     ret
   }
 
+  /**
+    * 将StorageLevel首先通过toInt方法将_useDisk、_useMemory、_useOffHeap、_deserialized四个属性
+    * 设置到四位数的状态位，然后与_replication一起被序列化写入外部二进制流。
+    */
   override def writeExternal(out: ObjectOutput): Unit = Utils.tryOrIOException {
     out.writeByte(toInt)
     out.writeByte(_replication)
   }
 
+  // 从外部二进制流中读取StorageLevel的各个属性。
   override def readExternal(in: ObjectInput): Unit = Utils.tryOrIOException {
     val flags = in.readByte()
     _useDisk = (flags & 8) != 0

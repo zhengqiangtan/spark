@@ -21,6 +21,6 @@ import org.apache.spark.annotation.Private;
 
 @Private
 public enum MemoryMode {
-  ON_HEAP,
-  OFF_HEAP
+  ON_HEAP, // 堆内存；并不能与JVM中的Java堆直接画等号，它只是JVM堆内存的一部分。
+  OFF_HEAP // 堆外内存；是Spark使用sun.misc.Unsafe的API直接在工作节点的系统内存中开辟的空间。
 }

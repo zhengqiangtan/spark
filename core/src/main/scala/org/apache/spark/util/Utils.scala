@@ -286,6 +286,7 @@ private[spark] object Utils extends Logging {
           maxAttempts + " attempts!")
       }
       try {
+        // 生成blockmgr-UUID字符串
         dir = new File(root, namePrefix + "-" + UUID.randomUUID.toString)
         if (dir.exists() || !dir.mkdirs()) {
           dir = null

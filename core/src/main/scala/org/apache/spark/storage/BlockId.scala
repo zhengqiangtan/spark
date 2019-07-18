@@ -28,16 +28,25 @@ import org.apache.spark.annotation.DeveloperApi
  * set of keys which produce its unique name.
  *
  * If your BlockId should be serializable, be sure to add it to the BlockId.apply() method.
+  *
+  * 在Spark的存储体系中，数据的读写是以块为单位，只不过这个块并非操作系统的块，而是设计用于Spark存储体系的块Block。
+  * 每个块都有唯一的标识，Spark把这个标识抽象为BlockId。
  */
 @DeveloperApi
 sealed abstract class BlockId {
-  /** A globally unique identifier for this Block. Can be used for ser/de. */
+  /** A globally unique identifier for this Block. Can be used for ser/de.
+    * Block全局唯一的标识名。
+    **/
   def name: String
 
   // convenience methods
+  // 将当前BlockId转换为RDDBlockId。如果当前BlockId是RDDBlockId，则转换为RDDBlockId，否则返回None。
   def asRDDId: Option[RDDBlockId] = if (isRDD) Some(asInstanceOf[RDDBlockId]) else None
+  // 当前BlockId是否是RDDBlockId。
   def isRDD: Boolean = isInstanceOf[RDDBlockId]
+  // 当前BlockId是否是ShuffleBlockId。
   def isShuffle: Boolean = isInstanceOf[ShuffleBlockId]
+  // 当前BlockId是否是BroadcastBlockId。
   def isBroadcast: Boolean = isInstanceOf[BroadcastBlockId]
 
   override def toString: String = name

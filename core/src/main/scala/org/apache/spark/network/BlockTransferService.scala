@@ -30,6 +30,10 @@ import org.apache.spark.network.shuffle.{BlockFetchingListener, ShuffleClient}
 import org.apache.spark.storage.{BlockId, StorageLevel}
 import org.apache.spark.util.ThreadUtils
 
+/**
+  * 块传输服务。此组件与Shuffle相关联，主要用于不同阶段的任务之间的Block数据的传输与读写。
+  * 例如，Map任务所在节点的BlockTransferService给Shuffle对应的Reduce任务提供下载map中间输出结果的服务。
+  */
 private[spark]
 abstract class BlockTransferService extends ShuffleClient with Closeable with Logging {
 

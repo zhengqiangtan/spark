@@ -27,6 +27,13 @@ import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
 
+/**
+  * 代理BlockManager与Driver上的BlockManagerMasterEndpoint通信。
+  * Executor、Driver节点上的BlockManager都通过BlockManagerMaster与BlockManagerMasterEndpoint进行通信，
+  * 例如，注册BlockManager、更新Block信息、获取Block的位置（即Block所在的BlockManager）、删除Executor等。
+  * BlockManagerMaster之所以能够和BlockManagerMasterEndpoint通信，
+  * 是因为它持有了BlockManagerMasterEndpoint的RpcEndpointRef。
+  */
 private[spark]
 class BlockManagerMaster(
     var driverEndpoint: RpcEndpointRef,

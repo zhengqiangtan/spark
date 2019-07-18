@@ -35,10 +35,11 @@ import org.apache.spark.util.Utils
  */
 @DeveloperApi
 class BlockManagerId private (
+    // 当前BlockManager所在的实例的ID。如果实例是Driver，那么ID为driver，否则由Master负责给各个Executor分配，ID格式为app-日期格式字符串-数字。
     private var executorId_ : String,
     private var host_ : String,
     private var port_ : Int,
-    private var topologyInfo_ : Option[String])
+    private var topologyInfo_ : Option[String]) // 拓扑信息。
   extends Externalizable {
 
   private def this() = this(null, null, 0, None)  // For deserialization only
@@ -64,10 +65,11 @@ class BlockManagerId private (
   def topologyInfo: Option[String] = topologyInfo_
 
   def isDriver: Boolean = {
-    executorId == SparkContext.DRIVER_IDENTIFIER ||
-      executorId == SparkContext.LEGACY_DRIVER_IDENTIFIER
+    executorId == SparkContext.DRIVER_IDENTIFIER || // "diver"
+      executorId == SparkContext.LEGACY_DRIVER_IDENTIFIER // "<driver>"
   }
 
+  // 将BlockManagerId的所有信息序列化后写到外部二进制流中。
   override def writeExternal(out: ObjectOutput): Unit = Utils.tryOrIOException {
     out.writeUTF(executorId_)
     out.writeUTF(host_)
@@ -77,6 +79,7 @@ class BlockManagerId private (
     topologyInfo.foreach(out.writeUTF(_))
   }
 
+  // 从外部二进制流中读取BlockManagerId的所有信息。
   override def readExternal(in: ObjectInput): Unit = Utils.tryOrIOException {
     executorId_ = in.readUTF()
     host_ = in.readUTF()

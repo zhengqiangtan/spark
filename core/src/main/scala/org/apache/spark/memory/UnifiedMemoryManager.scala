@@ -38,6 +38,9 @@ import org.apache.spark.storage.BlockId
  * The implication is that attempts to cache blocks may fail if execution has already eaten
  * up most of the storage space, in which case the new blocks will be evicted immediately
  * according to their respective storage levels.
+  *
+  * UnifiedMemoryManager在MemoryManager的内存模型之上，
+  * 将计算内存和存储内存之间的边界修改为“软”边界，即任何一方可以向另一方借用空闲的内存。
  *
  * @param onHeapStorageRegionSize Size of the storage region, in bytes.
  *                          This region is not statically reserved; execution can borrow from
@@ -46,9 +49,9 @@ import org.apache.spark.storage.BlockId
  */
 private[spark] class UnifiedMemoryManager private[memory] (
     conf: SparkConf,
-    val maxHeapMemory: Long,
-    onHeapStorageRegionSize: Long,
-    numCores: Int)
+    val maxHeapMemory: Long, // 最大堆内存。大小为系统可用内存与spark.memory.fraction属性值（默认为0.6）的乘积。
+    onHeapStorageRegionSize: Long, // 用于存储的堆内存大小。
+    numCores: Int) // CPU内核数。
   extends MemoryManager(
     conf,
     numCores,
@@ -63,11 +66,15 @@ private[spark] class UnifiedMemoryManager private[memory] (
 
   assertInvariants()
 
+  // 返回用于存储的最大堆内存。
   override def maxOnHeapStorageMemory: Long = synchronized {
+    // 总堆内存 - 用于计算操作的堆内存
     maxHeapMemory - onHeapExecutionMemoryPool.memoryUsed
   }
 
+  // 返回用于存储的最大堆外内存。
   override def maxOffHeapStorageMemory: Long = synchronized {
+    // 总对外内存 - 用于计算操作的堆外内存
     maxOffHeapMemory - offHeapExecutionMemoryPool.memoryUsed
   }
 
@@ -146,38 +153,47 @@ private[spark] class UnifiedMemoryManager private[memory] (
       numBytes, taskAttemptId, maybeGrowExecutionPool, computeMaxExecutionPoolSize)
   }
 
+  // 为存储BlockId对应的Block，从堆内存或堆外内存获取所需大小的内存。
   override def acquireStorageMemory(
       blockId: BlockId,
       numBytes: Long,
-      memoryMode: MemoryMode): Boolean = synchronized {
+      memoryMode: MemoryMode): Boolean = synchronized { // 加锁
     assertInvariants()
     assert(numBytes >= 0)
+    // 根据内存模式获取计算内存池、存储内存池和可以常用语存储的最大空间
     val (executionPool, storagePool, maxMemory) = memoryMode match {
-      case MemoryMode.ON_HEAP => (
+      case MemoryMode.ON_HEAP => ( // 堆内存
         onHeapExecutionMemoryPool,
         onHeapStorageMemoryPool,
         maxOnHeapStorageMemory)
-      case MemoryMode.OFF_HEAP => (
+      case MemoryMode.OFF_HEAP => ( // 堆外内存
         offHeapExecutionMemoryPool,
         offHeapStorageMemoryPool,
         maxOffHeapMemory)
     }
+    // 如果申请的用于存储的内存大于可用于存储的（经过协调之后的）最大空间，则返回false，表示获取失败
     if (numBytes > maxMemory) {
       // Fail fast if the block simply won't fit
       logInfo(s"Will not store $blockId as the required space ($numBytes bytes) exceeds our " +
         s"memory limit ($maxMemory bytes)")
       return false
     }
+    // 如果申请的用于存储的内存大于存储内存池的可用空间，则需要去计算内存池中借用空间
     if (numBytes > storagePool.memoryFree) {
       // There is not enough free memory in the storage pool, so try to borrow free memory from
       // the execution pool.
+      // 计算从计算内存池中借用的空间
       val memoryBorrowedFromExecution = Math.min(executionPool.memoryFree, numBytes)
+      // 从计算内存池中减去借走的空间
       executionPool.decrementPoolSize(memoryBorrowedFromExecution)
+      // 将借来的空间加到存储内存池中
       storagePool.incrementPoolSize(memoryBorrowedFromExecution)
     }
+    // 使用存储内存池分配空间
     storagePool.acquireMemory(blockId, numBytes)
   }
 
+  // 为展开BlockId对应的Block，从堆内存或堆外内存获取所需大小的内存。
   override def acquireUnrollMemory(
       blockId: BlockId,
       numBytes: Long,
