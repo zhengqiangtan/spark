@@ -35,6 +35,8 @@ import org.apache.spark.util.{ThreadUtils, Utils}
   * 并由各自BlockManager的slaveEndpoint属性持有各自BlockManagerSlaveEndpoint的RpcEndpointRef。
   * BlockManagerSlaveEndpoint将接收BlockManagerMasterEndpoint下发的命令。
   * 例如，删除Block、获取Block状态、获取匹配的BlockId等。
+  *
+  * BlockManagerSlaveEndpoint用于接收BlockManagerMasterEndpoint的命令并执行相应的操作。
  */
 private[storage]
 class BlockManagerSlaveEndpoint(
@@ -48,8 +50,10 @@ class BlockManagerSlaveEndpoint(
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
 
   // Operations that involve removing blocks may be slow and should be done asynchronously
+  // 用于接收BlockManagerMasterEndpoint的命令并执行相应的操作
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RemoveBlock(blockId) =>
+      // 异步执行
       doAsync[Boolean]("removing block " + blockId, context) {
         blockManager.removeBlock(blockId)
         true
@@ -84,17 +88,23 @@ class BlockManagerSlaveEndpoint(
   }
 
   private def doAsync[T](actionMessage: String, context: RpcCallContext)(body: => T) {
+    // 创建Future
     val future = Future {
       logDebug(actionMessage)
+      // 执行具体操作
       body
     }
+    // 执行成功时调用
     future.onSuccess { case response =>
       logDebug("Done " + actionMessage + ", response is " + response)
+      // 回复Response
       context.reply(response)
       logDebug("Sent response: " + response + " to " + context.senderAddress)
     }
+    // 执行失败时调用
     future.onFailure { case t: Throwable =>
       logError("Error in " + actionMessage, t)
+      // 回复失败出现的异常
       context.sendFailure(t)
     }
   }

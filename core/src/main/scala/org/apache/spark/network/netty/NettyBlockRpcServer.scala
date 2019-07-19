@@ -45,37 +45,49 @@ class NettyBlockRpcServer(
     blockManager: BlockDataManager)
   extends RpcHandler with Logging {
 
+  // 提供一对一的流服务
   private val streamManager = new OneForOneStreamManager()
 
   override def receive(
       client: TransportClient,
       rpcMessage: ByteBuffer,
       responseContext: RpcResponseCallback): Unit = {
+    // 获取并解码消息
     val message = BlockTransferMessage.Decoder.fromByteBuffer(rpcMessage)
     logTrace(s"Received request: $message")
 
+    // 根据消息类型分贝处理
     message match {
-      case openBlocks: OpenBlocks =>
+      case openBlocks: OpenBlocks => // 打开Block的消息
+        // 取出消息携带的BlockId数组，获取每个BlockId对应的Block的ManagedBuffer，封装为序列
         val blocks: Seq[ManagedBuffer] =
           openBlocks.blockIds.map(BlockId.apply).map(blockManager.getBlockData)
+        // 使用OneForOneStreamManager对象将这些Block的ManagedBuffer序列注册到streams缓存
         val streamId = streamManager.registerStream(appId, blocks.iterator.asJava)
         logTrace(s"Registered streamId $streamId with ${blocks.size} buffers")
+        // 返回StreamHandle消息，包含Stream ID和ManagedBuffer序列的大小
         responseContext.onSuccess(new StreamHandle(streamId, blocks.size).toByteBuffer)
 
-      case uploadBlock: UploadBlock =>
+      case uploadBlock: UploadBlock => // 上传Block的消息
         // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
+        // 对消息携带的元数据进行反序列化，得到存储级别和类型标记
         val (level: StorageLevel, classTag: ClassTag[_]) = {
           serializer
             .newInstance()
             .deserialize(ByteBuffer.wrap(uploadBlock.metadata))
             .asInstanceOf[(StorageLevel, ClassTag[_])]
         }
+        // 将UploadBlock消息携带的Block数据（即blockData），封装为NioManagedBuffer。
         val data = new NioManagedBuffer(ByteBuffer.wrap(uploadBlock.blockData))
+        // 获取UploadBlock消息携带的BlockId。
         val blockId = BlockId(uploadBlock.blockId)
+        // 调用BlockManager的putBlockData方法，将Block存入本地存储体系。
         blockManager.putBlockData(blockId, data, level, classTag)
+        // 通过响应上下文回复客户端。
         responseContext.onSuccess(ByteBuffer.allocate(0))
     }
   }
 
+  // 返回OneForOneStreamManager对象
   override def getStreamManager(): StreamManager = streamManager
 }

@@ -42,6 +42,9 @@ import org.apache.spark.util.{ThreadUtils, Utils}
   *
   * 主要对各个节点上的BlockManager、BlockManager与Executor的映射关系
   * 及Block位置信息（即Block所在的BlockManager）等进行管理。
+  *
+  * BlockManagerMasterEndpoint接收Driver或Executor上BlockManagerMaster发送的消息，
+  * 对所有的BlockManager统一管理。
  */
 private[spark]
 class BlockManagerMasterEndpoint(
@@ -52,17 +55,21 @@ class BlockManagerMasterEndpoint(
   extends ThreadSafeRpcEndpoint with Logging {
 
   // Mapping from block manager id to the block manager's information.
+  // BlockManagerId与BlockManagerInfo之间映射关系的缓存。
   private val blockManagerInfo = new mutable.HashMap[BlockManagerId, BlockManagerInfo]
 
   // Mapping from executor ID to block manager ID.
+  // Executor ID与BlockManagerId之间映射关系的缓存。
   private val blockManagerIdByExecutor = new mutable.HashMap[String, BlockManagerId]
 
   // Mapping from block id to the set of block managers that have the block.
+  // BlockId与存储了此BlockId对应Block的BlockManager的BlockManagerId之间的一对多关系缓存。
   private val blockLocations = new JHashMap[BlockId, mutable.HashSet[BlockManagerId]]
 
   private val askThreadPool = ThreadUtils.newDaemonCachedThreadPool("block-manager-ask-thread-pool")
   private implicit val askExecutionContext = ExecutionContext.fromExecutorService(askThreadPool)
 
+  // 对集群所有节点的拓扑结构的映射。
   private val topologyMapper = {
     val topologyMapperClassName = conf.get(
       "spark.storage.replication.topologyMapper", classOf[DefaultTopologyMapper].getName)
@@ -75,6 +82,7 @@ class BlockManagerMasterEndpoint(
 
   logInfo("BlockManagerMasterEndpoint up")
 
+  // 用于接收BlockManager相关的消息
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterBlockManager(blockManagerId, maxMemSize, slaveEndpoint) =>
       context.reply(register(blockManagerId, maxMemSize, slaveEndpoint))
@@ -118,7 +126,9 @@ class BlockManagerMasterEndpoint(
       context.reply(removeBroadcast(broadcastId, removeFromDriver))
 
     case RemoveBlock(blockId) =>
+      // 这里还需要删除其他Worker上的Block
       removeBlockFromWorkers(blockId)
+      // 然后返回true
       context.reply(true)
 
     case RemoveExecutor(execId) =>
@@ -237,14 +247,18 @@ class BlockManagerMasterEndpoint(
   // Remove a block from the slaves that have it. This can only be used to remove
   // blocks that the master knows about.
   private def removeBlockFromWorkers(blockId: BlockId) {
+    // 获取Block的位置
     val locations = blockLocations.get(blockId)
     if (locations != null) {
+      // 遍历所有位置
       locations.foreach { blockManagerId: BlockManagerId =>
+        // 获取对应的BlockManagerInfo对象
         val blockManager = blockManagerInfo.get(blockManagerId)
         if (blockManager.isDefined) {
           // Remove the block from the slave's BlockManager.
           // Doesn't actually wait for a confirmation and the message might get lost.
           // If message loss becomes frequent, we should add retry logic here.
+          // 获取其中的BlockManagerSlaveEndpoint发送RemoveBlock消息
           blockManager.get.slaveEndpoint.ask[Boolean](RemoveBlock(blockId))
         }
       }
@@ -319,6 +333,7 @@ class BlockManagerMasterEndpoint(
 
   /**
    * Returns the BlockManagerId with topology information populated, if available.
+    * BlockManagerMasterEndpoint在接收到RegisterBlockManager消息后，将调用该方法
    */
   private def register(
       idWithoutTopologyInfo: BlockManagerId,
@@ -326,6 +341,10 @@ class BlockManagerMasterEndpoint(
       slaveEndpoint: RpcEndpointRef): BlockManagerId = {
     // the dummy id is not expected to contain the topology information.
     // we get that info here and respond back with a more fleshed out block manager id
+    /**
+      * 根据BlockManager发送消息中的BlockManagerId的相关信息，构造新的BlockManagerId
+      * 主要是使用topologyMapper生产拓扑信息
+      */
     val id = BlockManagerId(
       idWithoutTopologyInfo.executorId,
       idWithoutTopologyInfo.host,
@@ -333,9 +352,10 @@ class BlockManagerMasterEndpoint(
       topologyMapper.getTopologyForHost(idWithoutTopologyInfo.host))
 
     val time = System.currentTimeMillis()
-    if (!blockManagerInfo.contains(id)) {
+    if (!blockManagerInfo.contains(id)) { // 当前并未管理该BlockManagerId的BlockManagerInfo对象
+      // 根据BlockManagerId中保存的Executor ID获取旧的BlockManagerId
       blockManagerIdByExecutor.get(id.executorId) match {
-        case Some(oldId) =>
+        case Some(oldId) => // 存在，则移除
           // A block manager of the same executor already exists, so remove it (assumed dead)
           logError("Got two different block manager registrations on same executor - "
               + s" will replace old one $oldId with new one $id")
@@ -345,12 +365,19 @@ class BlockManagerMasterEndpoint(
       logInfo("Registering block manager %s with %s RAM, %s".format(
         id.hostPort, Utils.bytesToString(maxMemSize), id))
 
+      // 更新blockManagerIdByExecutor字典
       blockManagerIdByExecutor(id.executorId) = id
 
+      /**
+        * 更新blockManagerInfo字典，添加新的BlockManagerInfo对象，
+        * 最终将触发对所有SparkListener的onBlockManagerAdded方法的调用，进而达到监控的目的。
+        */
       blockManagerInfo(id) = new BlockManagerInfo(
         id, System.currentTimeMillis(), maxMemSize, slaveEndpoint)
     }
+    // 投递BlockManager被添加的事件到事件总线
     listenerBus.post(SparkListenerBlockManagerAdded(time, id, maxMemSize))
+    // 返回新的BlockManagerId
     id
   }
 

@@ -126,7 +126,9 @@ public class RetryingBlockFetcher {
    */
   private void fetchAllOutstanding() {
     // Start by retrieving our shared state within a synchronized block.
+    //
     String[] blockIdsToFetch;
+    // 重试次数
     int numRetries;
     RetryingBlockFetchListener myListener;
     synchronized (this) {
@@ -137,12 +139,14 @@ public class RetryingBlockFetcher {
 
     // Now initiate the fetch on all outstanding blocks, possibly initiating a retry if that fails.
     try {
+      // 这里调用的是RetryingBlockFetcher.BlockFetchStarter对象的createAndStart()方法，会返回OneForOneBlockFetcher对象
       fetchStarter.createAndStart(blockIdsToFetch, myListener);
     } catch (Exception e) {
       logger.error(String.format("Exception while beginning fetch of %s outstanding blocks %s",
         blockIdsToFetch.length, numRetries > 0 ? "(after " + numRetries + " retries)" : ""), e);
 
-      if (shouldRetry(e)) {
+      if (shouldRetry(e)) { // 判断是否需要重试
+        // 再次重试，此处会向线程池提交一个新的任务执行fetchAllOutstanding()方法
         initiateRetry();
       } else {
         for (String bid : blockIdsToFetch) {
@@ -157,12 +161,15 @@ public class RetryingBlockFetcher {
    * calling fetchAllOutstanding() after a configured wait time.
    */
   private synchronized void initiateRetry() {
+    // 重试次数自增
     retryCount += 1;
+    // 创建RetryingBlockFetchListener监听器
     currentListener = new RetryingBlockFetchListener();
 
     logger.info("Retrying fetch ({}/{}) for {} outstanding blocks after {} ms",
       retryCount, maxRetries, outstandingBlocksIds.size(), retryWaitTime);
 
+    // 向线程池提交一个任务，任务内容是执行fetchAllOutstanding()方法
     executorService.submit(new Runnable() {
       @Override
       public void run() {
@@ -177,8 +184,10 @@ public class RetryingBlockFetcher {
    * the exception was an IOException and we haven't retried 'maxRetries' times already.
    */
   private synchronized boolean shouldRetry(Throwable e) {
+    // IOException
     boolean isIOException = e instanceof IOException
       || (e.getCause() != null && e.getCause() instanceof IOException);
+    // 还有剩余重试次数
     boolean hasRemainingRetries = retryCount < maxRetries;
     return isIOException && hasRemainingRetries;
   }

@@ -67,6 +67,11 @@ class BlockManagerMaster(
       maxMemSize: Long,
       slaveEndpoint: RpcEndpointRef): BlockManagerId = {
     logInfo(s"Registering BlockManager $blockManagerId")
+    /**
+      * 向BlockManagerMasterEndpoint发送RegisterBlockManager消息
+      * RegisterBlockManager将携带要注册的BlockManager的blockManagerId、
+      * 最大内存大小及slaveEndpoint（即BlockManagerSlaveEndpoint）
+      */
     val updatedId = driverEndpoint.askWithRetry[BlockManagerId](
       RegisterBlockManager(blockManagerId, maxMemSize, slaveEndpoint))
     logInfo(s"Registered BlockManager $updatedId")
@@ -79,6 +84,7 @@ class BlockManagerMaster(
       storageLevel: StorageLevel,
       memSize: Long,
       diskSize: Long): Boolean = {
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信
     val res = driverEndpoint.askWithRetry[Boolean](
       UpdateBlockInfo(blockManagerId, blockId, storageLevel, memSize, diskSize))
     logDebug(s"Updated info of block $blockId")
@@ -118,6 +124,7 @@ class BlockManagerMaster(
    * blocks that the driver knows about.
    */
   def removeBlock(blockId: BlockId) {
+    // 向BlockManagerMasterEndpoin发送RemoveBlock消息以删除Block
     driverEndpoint.askWithRetry[Boolean](RemoveBlock(blockId))
   }
 

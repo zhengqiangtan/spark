@@ -34,7 +34,15 @@ import org.apache.spark.util.Utils
  *
  * This class does not support concurrent writes. Also, once the writer has been opened it cannot be
  * reopened again.
- */
+ *
+  * @param file 要写入的文件。
+  * @param serializerManager
+  * @param serializerInstance
+  * @param bufferSize 缓冲大小。
+  * @param syncWrites 是否同步写。
+  * @param writeMetrics 对Shuffle中间结果写入到磁盘的度量与统计。
+  * @param blockId 块的唯一身份标识BlockId。
+  */
 private[spark] class DiskBlockObjectWriter(
     val file: File,
     serializerManager: SerializerManager,
@@ -71,8 +79,11 @@ private[spark] class DiskBlockObjectWriter(
   private var fos: FileOutputStream = null
   private var ts: TimeTrackingOutputStream = null
   private var objOut: SerializationStream = null
+  // 是否已经初始化
   private var initialized = false
+  // 是否已经打开流
   private var streamOpen = false
+  // 是否已经关闭
   private var hasBeenClosed = false
 
   /**
@@ -88,16 +99,22 @@ private[spark] class DiskBlockObjectWriter(
    * committedPosition: Offset after last committed write.
    * -----: Current writes to the underlying file.
    * xxxxx: Committed contents of the file.
+    *
+    * 提交的文件位置
    */
   private var committedPosition = file.length()
+  // 报告给度量系统的文件位置
   private var reportedPosition = committedPosition
 
   /**
    * Keep track of number of records written and also use this to periodically
    * output bytes written since the latter is expensive to do for each record.
+    *
+    * 已写的记录数
    */
   private var numRecordsWritten = 0
 
+  // 主要是创建各种流
   private def initialize(): Unit = {
     fos = new FileOutputStream(file, true)
     channel = fos.getChannel()
@@ -107,16 +124,21 @@ private[spark] class DiskBlockObjectWriter(
     mcs = new ManualCloseBufferedOutputStream
   }
 
+  // 打开要写入文件的各种输出流及管道
   def open(): DiskBlockObjectWriter = {
+    // 检查状态
     if (hasBeenClosed) {
       throw new IllegalStateException("Writer already closed. Cannot be reopened.")
     }
     if (!initialized) {
+      // 初始化
       initialize()
       initialized = true
     }
 
+    // 对Block的输出流进行压缩与加密。
     bs = serializerManager.wrapStream(blockId, mcs)
+    // 对压缩流进行序列化
     objOut = serializerInstance.serializeStream(bs)
     streamOpen = true
     this
@@ -157,6 +179,8 @@ private[spark] class DiskBlockObjectWriter(
   /**
    * Flush the partial writes and commit them as a single atomic block.
    * A commit may write additional bytes to frame the atomic block.
+    *
+    * 将输出流中的数据写入到磁盘。
    *
    * @return file segment with previous offset and length committed on this call.
    */
@@ -164,26 +188,34 @@ private[spark] class DiskBlockObjectWriter(
     if (streamOpen) {
       // NOTE: Because Kryo doesn't flush the underlying stream we explicitly flush both the
       //       serializer stream and the lower level stream.
+      // 刷新并关闭流
       objOut.flush()
       bs.flush()
       objOut.close()
       streamOpen = false
 
-      if (syncWrites) {
+      if (syncWrites) { // 同步写出
         // Force outstanding writes to disk and track how long it takes
         val start = System.nanoTime()
+        // 进行同步
         fos.getFD.sync()
         writeMetrics.incWriteTime(System.nanoTime() - start)
       }
 
+      // 记录写出数据后FileChannel当前的position
       val pos = channel.position()
+      // 得到本次写出数据的FileSegment对象
       val fileSegment = new FileSegment(file, committedPosition, pos - committedPosition)
+      // 记录position
       committedPosition = pos
       // In certain compression codecs, more bytes are written after streams are closed
+      // 向度量系统记录写出的数据字节数
       writeMetrics.incBytesWritten(committedPosition - reportedPosition)
       reportedPosition = committedPosition
+      // 返回FileSegment对象
       fileSegment
     } else {
+      // 流关闭了，返回长度为0的FileSegment对象
       new FileSegment(file, committedPosition, 0)
     }
   }
@@ -223,6 +255,7 @@ private[spark] class DiskBlockObjectWriter(
 
   /**
    * Writes a key-value pair.
+    * 向输出流中写入键值对。
    */
   def write(key: Any, value: Any) {
     if (!streamOpen) {
@@ -246,6 +279,8 @@ private[spark] class DiskBlockObjectWriter(
 
   /**
    * Notify the writer that a record worth of bytes has been written with OutputStream#write.
+    *
+    * 对写入的记录数进行统计和度量。
    */
   def recordWritten(): Unit = {
     numRecordsWritten += 1
