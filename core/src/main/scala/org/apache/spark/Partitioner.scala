@@ -34,7 +34,9 @@ import org.apache.spark.util.random.SamplingUtils
  * Maps each key to a partition ID, from 0 to `numPartitions - 1`.
  */
 abstract class Partitioner extends Serializable {
+  // 用于获取分区数量
   def numPartitions: Int
+  // 用于将输入的key映射到下游RDD的从0到numPartitions-1这一范围中的某一个分区
   def getPartition(key: Any): Int
 }
 
@@ -82,8 +84,10 @@ class HashPartitioner(partitions: Int) extends Partitioner {
 
   def numPartitions: Int = partitions
 
+  // 计算出下游RDD的各个分区将具体处理哪些key
   def getPartition(key: Any): Int = key match {
     case null => 0
+    // 该操作内部是以key.hashCode % numPartitions进行计算的，做了非负处理
     case _ => Utils.nonNegativeMod(key.hashCode, numPartitions)
   }
 

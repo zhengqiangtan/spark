@@ -26,7 +26,17 @@ import org.apache.spark.storage.RDDInfo
 /**
  * :: DeveloperApi ::
  * Stores information about a stage to pass from the scheduler to SparkListeners.
- */
+ *
+  * @param stageId // Stage的id
+  * @param attemptId // 当前Stage尝试的id
+  * @param name // 当前Stage的名称
+  * @param numTasks // 当前Stage的Task数量
+  * @param rddInfos // RDD信息（即RDDInfo）的序列
+  * @param parentIds // 当前Stage的父亲Stage的身份标识序列
+  * @param details // 详细的线程栈信息
+  * @param taskMetrics // Task的度量信息
+  * @param taskLocalityPreferences // 用于存储任务的本地性偏好
+  */
 @DeveloperApi
 class StageInfo(
     val stageId: Int,
@@ -38,24 +48,35 @@ class StageInfo(
     val details: String,
     val taskMetrics: TaskMetrics = null,
     private[spark] val taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty) {
-  /** When this stage was submitted from the DAGScheduler to a TaskScheduler. */
+  /** When this stage was submitted from the DAGScheduler to a TaskScheduler.
+    * DAGScheduler将当前Stage提交给TaskScheduler的时间
+    **/
   var submissionTime: Option[Long] = None
-  /** Time when all tasks in the stage completed or when the stage was cancelled. */
+  /** Time when all tasks in the stage completed or when the stage was cancelled.
+    * 当前Stage中的所有Task完成的时间（即Stage完成的时间）或者Stage被取消的时间
+    **/
   var completionTime: Option[Long] = None
-  /** If the stage failed, the reason why. */
+  /** If the stage failed, the reason why.
+    * 如果Stage失败了，用于记录失败的原因
+    **/
   var failureReason: Option[String] = None
 
   /**
    * Terminal values of accumulables updated during this stage, including all the user-defined
    * accumulators.
+    *
+    * 存储了所有聚合器计算的最终值
    */
   val accumulables = HashMap[Long, AccumulableInfo]()
 
+  // 当Stage失败时会调用的方法
   def stageFailed(reason: String) {
+    // 保存Stage失败的原因和Stage完成的时间
     failureReason = Some(reason)
     completionTime = Some(System.currentTimeMillis)
   }
 
+  // 根据completionTime和failureReason来获取状态字符串表示
   private[spark] def getStatusString: String = {
     if (completionTime.isDefined) {
       if (failureReason.isDefined) {
@@ -84,8 +105,11 @@ private[spark] object StageInfo {
       taskMetrics: TaskMetrics = null,
       taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty
     ): StageInfo = {
+    // 获取RDD的祖先依赖中属于窄依赖的RDD序列，给得到的每个RDD创建RDDInfo对象
     val ancestorRddInfos = stage.rdd.getNarrowAncestors.map(RDDInfo.fromRdd)
+    // 给当前Stage的RDD创建对应的RDDInfo对象，与ancestorRddInfos中所有RDDInfo对象合并到一个序列中
     val rddInfos = Seq(RDDInfo.fromRdd(stage.rdd)) ++ ancestorRddInfos
+    // 创建StageInfo对象
     new StageInfo(
       stage.id,
       attemptId,

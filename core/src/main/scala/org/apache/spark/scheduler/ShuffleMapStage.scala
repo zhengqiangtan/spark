@@ -32,7 +32,31 @@ import org.apache.spark.util.CallSite
  * ShuffleMapStages can also be submitted independently as jobs with DAGScheduler.submitMapStage.
  * For such stages, the ActiveJobs that submitted them are tracked in `mapStageJobs`. Note that
  * there can be multiple ActiveJobs trying to compute the same shuffle map stage.
- */
+  *
+  * ShuffleMapStage是DAG调度流程的中间Stage，
+  * 它可以包括一到多个ShuffleMapTask，这些ShuffleMapTask将生成用于Shuffle的数据。
+  * ShuffleMapStage一般是ResultStage或者其他ShuffleMapStage的前置Stage，
+  * ShuffleMapTask则通过Shuffle与下游Stage中的Task串联起来。
+  * 从ShuffleMapStage的命名可以看出，它将对Shuffle的数据映射到下游Stage的各个分区中。
+  *
+  * @param id Unique stage ID
+  *           Stage的身份标识
+  * @param rdd RDD that this stage runs on: for a shuffle map stage, it's the RDD we run map tasks
+  *   on, while for a result stage, it's the target RDD that we ran an action on
+  *   当前Stage包含的RDD
+  * @param numTasks Total number of tasks in stage; result stages in particular may not need to
+  *   compute all partitions, e.g. for first(), lookup(), and take().
+  *   当前Stage的Task数量
+  * @param parents List of stages that this stage depends on (through shuffle dependencies).
+  *                当前Stage的父Stage列表，一个Stage可以有一到多个父亲Stage。
+  * @param firstJobId ID of the first job this stage was part of, for FIFO scheduling.
+  *                   第一个提交当前Stage的Job的身份标识（即Job的id）。
+  *                   当使用FIFO调度时，通过firstJobId首先计算来自较早Job的Stage，或者在发生故障时更快的恢复。
+  * @param callSite Location in the user program associated with this stage: either where the target
+  *   RDD was created, for a shuffle map stage, or where the action for a result stage was called.
+  *   应用程序中与当前Stage相关联的调用栈信息。
+  * @param shuffleDep 与ShuffleMapStage相对应的ShuffleDependency
+  */
 private[spark] class ShuffleMapStage(
     id: Int,
     rdd: RDD[_],
@@ -43,14 +67,19 @@ private[spark] class ShuffleMapStage(
     val shuffleDep: ShuffleDependency[_, _, _])
   extends Stage(id, rdd, numTasks, parents, firstJobId, callSite) {
 
+  // 与ShuffleMapStage相关联的ActiveJob的列表
   private[this] var _mapStageJobs: List[ActiveJob] = Nil
 
+  // ShuffleMapStage可用的Map任务的输出数量，这也代表了执行成功的Map任务数。
   private[this] var _numAvailableOutputs: Int = 0
 
   /**
    * List of [[MapStatus]] for each partition. The index of the array is the map partition id,
    * and each value in the array is the list of possible [[MapStatus]] for a partition
    * (a single task might run multiple times).
+    *
+    * ShuffleMapStage的各个分区与其对应的MapStatus列表的映射关系。
+    * 由于map任务可能会运行多次，因而可能会有多个MapStatus。
    */
   private[this] val outputLocs = Array.fill[List[MapStatus]](numPartitions)(Nil)
 
@@ -62,12 +91,16 @@ private[spark] class ShuffleMapStage(
    */
   def mapStageJobs: Seq[ActiveJob] = _mapStageJobs
 
-  /** Adds the job to the active job list. */
+  /** Adds the job to the active job list.
+    * 向ShuffleMapStage相关联的ActiveJob的列表中添加ActiveJob
+    **/
   def addActiveJob(job: ActiveJob): Unit = {
     _mapStageJobs = job :: _mapStageJobs
   }
 
-  /** Removes the job from the active job list. */
+  /** Removes the job from the active job list.
+    * 向ShuffleMapStage相关联的ActiveJob的列表中删除ActiveJob
+    **/
   def removeActiveJob(job: ActiveJob): Unit = {
     _mapStageJobs = _mapStageJobs.filter(_ != job)
   }
@@ -82,21 +115,34 @@ private[spark] class ShuffleMapStage(
   /**
    * Returns true if the map stage is ready, i.e. all partitions have shuffle outputs.
    * This should be the same as `outputLocs.contains(Nil)`.
+    *
+    * 当_numAvailableOutputs与numPartitions相等时为true。
+    * 也就是说，ShuffleMapStage的所有分区的map任务都执行成功后，ShuffleMapStage才是可用的。
    */
   def isAvailable: Boolean = _numAvailableOutputs == numPartitions
 
-  /** Returns the sequence of partition ids that are missing (i.e. needs to be computed). */
+  /** Returns the sequence of partition ids that are missing (i.e. needs to be computed).
+    * 找到所有还未执行成功而需要计算的分区
+    **/
   override def findMissingPartitions(): Seq[Int] = {
+    // 从outputLocs中查找
     val missing = (0 until numPartitions).filter(id => outputLocs(id).isEmpty)
     assert(missing.size == numPartitions - _numAvailableOutputs,
       s"${missing.size} missing, expected ${numPartitions - _numAvailableOutputs}")
     missing
   }
 
+  /**
+    * 当某一分区的任务执行完成后，
+    * 首先将分区与MapStatus的对应关系添加到outputLocs中，然后将可用的输出数加一。
+    */
   def addOutputLoc(partition: Int, status: MapStatus): Unit = {
+    // 得到分区对应的MapStatus列表
     val prevList = outputLocs(partition)
+    // 将status添加到该列表中
     outputLocs(partition) = status :: prevList
-    if (prevList == Nil) {
+    if (prevList == Nil) { // 如果之前该分区没有任何MapStatus
+      // 将可用的输出数加一
       _numAvailableOutputs += 1
     }
   }
