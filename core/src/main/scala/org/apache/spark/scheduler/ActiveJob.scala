@@ -34,11 +34,16 @@ import org.apache.spark.util.CallSite
  * these previous stages. These dependencies are managed inside DAGScheduler.
  *
  * @param jobId A unique ID for this job.
+  *              Job的身份标识
  * @param finalStage The stage that this job computes (either a ResultStage for an action or a
  *   ShuffleMapStage for submitMapStage).
+  *   Job的最下游Stage
  * @param callSite Where this job was initiated in the user's program (shown on UI).
+  *                 应用程序调用栈
  * @param listener A listener to notify if tasks in this job finish or the job fails.
+  *                 监听当前Job的JobListener
  * @param properties Scheduling properties attached to the job, such as fair scheduler pool name.
+  *                   包含了当前Job的调度、Job group、描述等属性的Properties
  */
 private[spark] class ActiveJob(
     val jobId: Int,
@@ -50,14 +55,21 @@ private[spark] class ActiveJob(
   /**
    * Number of partitions we need to compute for this job. Note that result stages may not need
    * to compute all partitions in their target RDD, for actions like first() and lookup().
+    *
+    * 当前Job的分区数量。
+    * 如果finalStage为ResultStage，那么此属性等于ResultStage的partitions属性的长度。
+    * 如果finalStage为ShuffleMapStage，那么此属性等于ShuffleMapStage的rdd的partitions属性的长度。
    */
   val numPartitions = finalStage match {
     case r: ResultStage => r.partitions.length
     case m: ShuffleMapStage => m.rdd.partitions.length
   }
 
-  /** Which partitions of the stage have finished */
+  /** Which partitions of the stage have finished
+    * 每个数组索引代表一个分区的任务是否执行完成
+    **/
   val finished = Array.fill[Boolean](numPartitions)(false)
 
+  // 当前Job的所有任务中已完成任务的数量
   var numFinished = 0
 }

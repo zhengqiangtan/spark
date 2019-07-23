@@ -22,6 +22,13 @@ import org.apache.spark.annotation.DeveloperApi
 @DeveloperApi
 object TaskLocality extends Enumeration {
   // Process local is expected to be used ONLY within TaskSetManager for now.
+  /**
+    * PROCESS_LOCAL：进程本地化偏好
+    * NODE_LOCAL：节点本地化偏好
+    * NO_PREF：无本地化偏好
+    * RACK_LOCAL：机架本地化偏好
+    * ANY：任何
+    */
   val PROCESS_LOCAL, NODE_LOCAL, NO_PREF, RACK_LOCAL, ANY = Value
 
   type TaskLocality = Value

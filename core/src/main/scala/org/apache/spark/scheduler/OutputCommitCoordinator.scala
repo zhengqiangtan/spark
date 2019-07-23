@@ -157,7 +157,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
             s"partition=$partition) failed; clearing lock")
           /**
             * 将给定Stage的对应TaskAttemptNumber数组中指定分区的值修改为NO_AUTHORIZED_COMMITTER，
-            * 以便于之后的任务尝试能够有权限提交。
+            * 以便于之后的TaskAttempt能够有权限提交。
             */
           authorizedCommitters(partition) = NO_AUTHORIZED_COMMITTER
         }
