@@ -40,6 +40,10 @@ import org.apache.spark.util.{RpcUtils, SerializableBuffer, ThreadUtils, Utils}
  * each new task. Executors may be launched in a variety of ways, such as Mesos tasks for the
  * coarse-grained Mesos mode or standalone processes for Spark's standalone deploy mode
  * (spark.deploy.*).
+  *
+  * 等待CoarseGrainedExecutorBackend进行连接的SchedulerBackend实现。
+  * 由CoarseGrainedSchedulerBackend建立的CoarseGrainedExecutorBackend进程将会一直存在，
+  * 真正的Executor线程将在CoarseGrainedExecutorBackend进程中执行。
  */
 private[spark]
 class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: RpcEnv)
