@@ -38,12 +38,18 @@ import org.apache.spark.internal.Logging
  *
  * @param lock a [[MemoryManager]] instance to synchronize on
  * @param memoryMode the type of memory tracked by this pool (on- or off-heap)
+  *                   内存模式。用于执行的内存池包括堆内存和堆外内存两种。
  */
 private[memory] class ExecutionMemoryPool(
     lock: Object,
     memoryMode: MemoryMode
   ) extends MemoryPool(lock) with Logging {
 
+  /**
+    * 内存池的名称。
+    * 如果memoryMode是MemoryMode.ON_HEAP，则内存池名称为on-heap execution。
+    * 如果memoryMode是MemoryMode.OFF_HEAP，则内存池名称为off-heap execution。
+    */
   private[this] val poolName: String = memoryMode match {
     case MemoryMode.ON_HEAP => "on-heap execution"
     case MemoryMode.OFF_HEAP => "off-heap execution"
@@ -51,16 +57,23 @@ private[memory] class ExecutionMemoryPool(
 
   /**
    * Map from taskAttemptId -> memory consumption in bytes
+    *
+    * TaskAttempt的身份标识（taskAttemptId）与所消费内存的大小之间的映射关系。
    */
   @GuardedBy("lock")
   private val memoryForTask = new mutable.HashMap[Long, Long]()
 
+  /**
+    * 已经使用的内存大小（单位为字节）。
+    * 实际为所有TaskAttempt所消费的内存大小之和，即memoryForTask这个Map中所有value的和。
+    */
   override def memoryUsed: Long = lock.synchronized {
     memoryForTask.values.sum
   }
 
   /**
    * Returns the memory consumption, in bytes, for the given task.
+    * 获取TaskAttempt使用的内存大小，即memoryForTask中taskAttemptId对应的value值。
    */
   def getMemoryUsageForTask(taskAttemptId: Long): Long = lock.synchronized {
     memoryForTask.getOrElse(taskAttemptId, 0L)
