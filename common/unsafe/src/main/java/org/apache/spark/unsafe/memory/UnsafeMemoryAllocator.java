@@ -21,19 +21,30 @@ import org.apache.spark.unsafe.Platform;
 
 /**
  * A simple {@link MemoryAllocator} that uses {@code Unsafe} to allocate off-heap memory.
+ *
+ * Tungsten在堆外内存模式下使用的内存分配器，与offHeap ExecutionMemoryPool配合使用。
  */
 public class UnsafeMemoryAllocator implements MemoryAllocator {
 
+  // 用于分配指定大小（size）的MemoryBlock。
   @Override
   public MemoryBlock allocate(long size) throws OutOfMemoryError {
+    /**
+     * 在堆外内存分配指定大小的内存。
+     * Platform的allocateMemory()方法实际代理了sun.misc.Unsafe的allocateMemory()方法，
+     * sun.misc.Unsafe的allocateMemory()方法将返回分配的内存地址。
+     */
     long address = Platform.allocateMemory(size);
+    // 创建MemoryBlock，可以看到未传递MemoryBlock的obj属性
     MemoryBlock memory = new MemoryBlock(null, address, size);
     if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
       memory.fill(MemoryAllocator.MEMORY_DEBUG_FILL_CLEAN_VALUE);
     }
+    // 返回MemoryBlock
     return memory;
   }
 
+  // 用于释放MemoryBlock。
   @Override
   public void free(MemoryBlock memory) {
     assert (memory.obj == null) :
@@ -41,6 +52,7 @@ public class UnsafeMemoryAllocator implements MemoryAllocator {
     if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
       memory.fill(MemoryAllocator.MEMORY_DEBUG_FILL_FREED_VALUE);
     }
+    // 调用了Platform的freeMemory()方法，后者实际代理了sun.misc.Unsafe的freeMemory方法。
     Platform.freeMemory(memory.offset);
   }
 }

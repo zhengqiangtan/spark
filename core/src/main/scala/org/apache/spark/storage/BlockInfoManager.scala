@@ -86,8 +86,8 @@ private[storage] class BlockInfo(
   }
 
   /**
-    * 任务尝试在对Block进行写操作前，首先必须获得对应BlockInfo的写锁。
-    * _writerTask用于保存任务尝试的ID（每个任务在实际执行时，会多次尝试，每次尝试都会分配一个ID）。
+    * TaskAttempt在对Block进行写操作前，首先必须获得对应BlockInfo的写锁。
+    * _writerTask用于保存TaskAttempt的ID（每个任务在实际执行时，会多次尝试，每次尝试都会分配一个ID）。
     */
   private[this] var _writerTask: Long = BlockInfo.NO_WRITER
 
@@ -144,7 +144,7 @@ private[storage] class BlockInfoManager extends Logging {
    * Tracks the set of blocks that each task has locked for writing.
     *
     * 每次任务执行尝试的标识TaskAttemptId与执行获取的Block的写锁之间的映射关系。
-    * TaskAttemptId与写锁之间是一对多的关系，即一次任务尝试执行会获取零到多个Block的写锁。
+    * TaskAttemptId与写锁之间是一对多的关系，即一次TaskAttempt执行会获取零到多个Block的写锁。
    */
   @GuardedBy("this")
   private[this] val writeLocksByTask =
@@ -155,8 +155,8 @@ private[storage] class BlockInfoManager extends Logging {
    * Tracks the set of blocks that each task has locked for reading, along with the number of times
    * that a block has been locked (since our read locks are re-entrant).
     *
-    * 每次任务尝试执行的标识TaskAttemptId与执行获取的Block的读锁之间的映射关系。
-    * TaskAttemptId与读锁之间是一对多的关系，即一次任务尝试执行会获取零到多个Block的读锁，并且会记录对于同一个Block的读锁的占用次数。
+    * 每次TaskAttempt执行的标识TaskAttemptId与执行获取的Block的读锁之间的映射关系。
+    * TaskAttemptId与读锁之间是一对多的关系，即一次TaskAttempt执行会获取零到多个Block的读锁，并且会记录对于同一个Block的读锁的占用次数。
    */
   @GuardedBy("this")
   private[this] val readLocksByTask =
@@ -318,7 +318,7 @@ private[storage] class BlockInfoManager extends Logging {
     require(info.writerTask == currentTaskAttemptId,
       s"Task $currentTaskAttemptId tried to downgrade a write lock that it does not hold on" +
         s" block $blockId")
-    // 调用unlock方法释放当前任务尝试线程从BlockId对应Block获取的写锁。
+    // 调用unlock方法释放当前TaskAttempt线程从BlockId对应Block获取的写锁。
     unlock(blockId)
     // 非阻塞方式获取读锁
     val lockOutcome = lockForReading(blockId, blocking = false)

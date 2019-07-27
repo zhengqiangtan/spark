@@ -53,7 +53,7 @@ import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
   *
   * TaskSchedulerImpl的功能包括接收DAGScheduler给每个Stage创建的Task集合，
   * 按照调度算法将资源分配给Task，将Task交给Spark集群不同节点上的Executor运行，
-  * 在这些Task执行失败时进行重试，通过推断执行减轻落后的Task对整体作业进度的影响。
+  * 在这些Task执行失败时进行重试，通过推测执行减轻落后的Task对整体作业进度的影响。
  *
   * @param sc
   * @param maxTaskFailures 任务失败的最大次数
@@ -590,7 +590,7 @@ private[spark] class TaskSchedulerImpl(
       // 使用根调度池的checkSpeculatableTasks()方法检测
       shouldRevive = rootPool.checkSpeculatableTasks(MIN_TIME_TO_SPECULATION)
     }
-    // 如果检查到有可以推断执行的任务，则调用SchedulerBackend的reviveOffers方法
+    // 如果检查到有可以推测执行的任务，则调用SchedulerBackend的reviveOffers方法
     if (shouldRevive) {
       /**
         * Local模式下LocalSchedulerBackend的reviveOffers()方法将向LocalEndpoint发送ReviveOffers消息，

@@ -60,7 +60,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
    *
    * Access to this map should be guarded by synchronizing on the OutputCommitCoordinator instance.
     *
-    * 缓存Stage的各个分区的任务尝试
+    * 缓存Stage的各个分区的TaskAttempt
    */
   private val authorizedCommittersByStage = mutable.Map[StageId, Array[TaskAttemptNumber]]()
 
@@ -176,7 +176,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
   }
 
   // Marked private[scheduler] instead of private so this can be mocked in tests
-  // 用于判断给定的任务尝试是否有权限将给定Stage的指定分区的数据提交到HDFS。
+  // 用于判断给定的TaskAttempt是否有权限将给定Stage的指定分区的数据提交到HDFS。
   private[scheduler] def handleAskPermissionToCommit(
       stage: StageId,
       partition: PartitionId,
@@ -192,11 +192,11 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
               * 说明当前是首次提交给定Stage的指定分区的输出，
               * 因此给定TaskAttemptNumber有权限将给定Stage的指定分区的输出提交到HDFS。
               * 并将给定分区的索引与attemptNumber的关系保存到TaskAttemptNumber数组中，
-              * 标识已有任务尝试了提交。
+              * 标识已有TaskAttempt了提交。
               */
             authorizedCommitters(partition) = attemptNumber
             true
-          case existingCommitter => // 已存在任务尝试将给定Stage的指定分区的输出提交到HDFS
+          case existingCommitter => // 已存在TaskAttempt将给定Stage的指定分区的输出提交到HDFS
             logDebug(s"Denying attemptNumber=$attemptNumber to commit for stage=$stage, " +
               s"partition=$partition; existingCommitter = $existingCommitter")
             // 返回false，标识当前attemptNumber没有权限将给定Stage的指定分区的输出提交到HDFS

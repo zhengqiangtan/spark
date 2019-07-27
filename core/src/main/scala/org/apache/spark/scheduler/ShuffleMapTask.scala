@@ -35,6 +35,10 @@ import org.apache.spark.shuffle.ShuffleWriter
  * specified in the ShuffleDependency).
  *
  * See [[org.apache.spark.scheduler.Task]] for more information.
+  *
+  * ShuffleMapTask类似于Hadoop中的MapTask，
+  * 它对输入数据计算后，将输出的数据在Shuffle之前映射到不同的分区，
+  * 下游处理各个分区的Task将知道处理哪些数据。
  *
  * @param stageId id of the stage this task belongs to
  * @param stageAttemptId attempt id of the stage this task belongs to
@@ -82,6 +86,7 @@ private[spark] class ShuffleMapTask(
       threadMXBean.getCurrentThreadCpuTime
     } else 0L
     val ser = SparkEnv.get.closureSerializer.newInstance()
+    // 对任务进行反序列化，得到RDD和ShuffleDependency
     val (rdd, dep) = ser.deserialize[(RDD[_], ShuffleDependency[_, _, _])](
       ByteBuffer.wrap(taskBinary.value), Thread.currentThread.getContextClassLoader)
     _executorDeserializeTime = System.currentTimeMillis() - deserializeStartTime
@@ -91,8 +96,11 @@ private[spark] class ShuffleMapTask(
 
     var writer: ShuffleWriter[Any, Any] = null
     try {
+      // 将计算的中间结果写入磁盘文件
       val manager = SparkEnv.get.shuffleManager
+      // 获取对指定分区的数据进行磁盘写操作的SortShuffleWriter
       writer = manager.getWriter[Any, Any](dep.shuffleHandle, partitionId, context)
+      // 调用RDD的iterator方法进行迭代计算，将计算的中间结果写入磁盘文件
       writer.write(rdd.iterator(partition, context).asInstanceOf[Iterator[_ <: Product2[Any, Any]]])
       writer.stop(success = true).get
     } catch {

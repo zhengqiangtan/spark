@@ -462,7 +462,7 @@ private[spark] class TaskSetManager(
   /**
    * Dequeue a pending task for a given node and return its index and locality level.
    * Only search for tasks matching the given locality constraint.
-    * 根据指定的Host、Executor和本地性级别，找出要执行的Task的索引、相应的本地性级别及是否进行推断执行
+    * 根据指定的Host、Executor和本地性级别，找出要执行的Task的索引、相应的本地性级别及是否进行推测执行
    *
    * @return An option containing (task index within the task set, locality, is speculative?)
    */
@@ -557,7 +557,7 @@ private[spark] class TaskSetManager(
         // Do various bookkeeping
         // 增加复制运行数
         copiesRunning(index) += 1
-        // 获取任务尝试号attemptNum
+        // 获取TaskAttempt号attemptNum
         val attemptNum = taskAttempts(index).size
         // 创建Task尝试信息
         val info = new TaskInfo(taskId, index, attemptNum, curTime,

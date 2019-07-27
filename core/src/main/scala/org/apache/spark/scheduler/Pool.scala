@@ -118,7 +118,7 @@ private[spark] class Pool(
     schedulableQueue.asScala.foreach(_.executorLost(executorId, host, reason))
   }
 
-  // 检查当前Pool中是否有需要推断执行的任务
+  // 检查当前Pool中是否有需要推测执行的任务
   override def checkSpeculatableTasks(minTimeToSpeculation: Int): Boolean = {
     var shouldRevive = false
     // 遍历schedulableQueue中所有的Schedulable对象

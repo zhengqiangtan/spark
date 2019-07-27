@@ -138,6 +138,8 @@ private[spark] abstract class MemoryManager(
    * task has a chance to ramp up to at least 1 / 2N of the total memory pool (where N is the # of
    * active tasks) before it is forced to spill. This can happen if the number of tasks increase
    * but an older task had a lot of memory already.
+    *
+    * 为执行taskAttemptId对应的TaskAttempt，从堆内存或堆外内存获取所需大小（即numBytes）的内存。
    */
   private[memory]
   def acquireExecutionMemory(
@@ -147,6 +149,8 @@ private[spark] abstract class MemoryManager(
 
   /**
    * Release numBytes of execution memory belonging to the given task.
+    *
+    * 从堆内存或堆外内存释放taskAttemptId对应的TaskAttempt所消费的指定大小（即numBytes）的执行内存。
    */
   private[memory]
   def releaseExecutionMemory(
@@ -161,6 +165,8 @@ private[spark] abstract class MemoryManager(
 
   /**
    * Release all memory for the given task and mark it as inactive (e.g. when a task ends).
+    *
+    * 从堆内存及堆外内存释放taskAttemptId代表的TaskAttempt所消费的所有执行内存。
    *
    * @return the number of bytes freed.
    */
@@ -200,6 +206,8 @@ private[spark] abstract class MemoryManager(
 
   /**
    * Execution memory currently in use, in bytes.
+    *
+    * 获取堆上执行内存池与堆外执行内存池已经使用的执行内存之和。
    */
   final def executionMemoryUsed: Long = synchronized {
     onHeapExecutionMemoryPool.memoryUsed + offHeapExecutionMemoryPool.memoryUsed
@@ -215,6 +223,8 @@ private[spark] abstract class MemoryManager(
 
   /**
    * Returns the execution memory consumption, in bytes, for the given task.
+    *
+    * 获取taskAttemptId代表的TaskAttempt在堆上执行内存池与堆外执行内存池所消费的执行内存之和。
    */
   private[memory] def getExecutionMemoryUsageForTask(taskAttemptId: Long): Long = synchronized {
     onHeapExecutionMemoryPool.getMemoryUsageForTask(taskAttemptId) +
@@ -226,6 +236,11 @@ private[spark] abstract class MemoryManager(
   /**
    * Tracks whether Tungsten memory will be allocated on the JVM heap or off-heap using
    * sun.misc.Unsafe.
+    *
+    * Tungsten的内存模式。tungstenMemoryMode也采用枚举类型MemoryMode来表示堆内存和堆外内存。
+    * 当Tungsten在堆内存模式下，数据存储在JVM堆上，这时Tungsten选择onHeapExecutionMemoryPool作为内存池。
+    * 当Tungsten在堆外内存模式下，数据则会存储在堆外内存中，这时Tungsten选择offHeapExecutionMemoryPool作为内存池。
+    * 可以通过spark.memory.offHeap.enabled属性（默认为false）来配置是否启用Tungsten的堆外内存。
    */
   final val tungstenMemoryMode: MemoryMode = {
     if (conf.getBoolean("spark.memory.offHeap.enabled", false)) {
@@ -245,6 +260,10 @@ private[spark] abstract class MemoryManager(
    * If user didn't explicitly set "spark.buffer.pageSize", we figure out the default value
    * by looking at the number of cores available to the process, and the total amount of memory,
    * and then divide it by a factor of safety.
+    *
+    * Tungsten采用的Page的默认大小（单位为字节）。
+    * 可通过spark.buffer.pageSize属性进行配置。
+    * 如果未指定spark.buffer.pageSize属性，则使用该方法进行计算。
    */
   val pageSizeBytes: Long = {
     val minPageSize = 1L * 1024 * 1024   // 1MB
@@ -263,6 +282,11 @@ private[spark] abstract class MemoryManager(
 
   /**
    * Allocates memory for use by Unsafe/Tungsten code.
+    *
+    * Tungsten采用的内存分配器（MemoryAllocator）。
+    * 如果tungstenMemoryMode为MemoryMode.ON_HEAP，
+    * 那么tungstenMemoryAllocator为堆内存分配器（HeapMemoryAllocator），
+    * 否则为使用sun.misc.Unsafe的API分配操作系统内存的分配器UnsafeMemoryAllocator。
    */
   private[memory] final val tungstenMemoryAllocator: MemoryAllocator = {
     tungstenMemoryMode match {

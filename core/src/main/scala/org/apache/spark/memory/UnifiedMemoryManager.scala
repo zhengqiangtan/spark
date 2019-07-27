@@ -86,6 +86,8 @@ private[spark] class UnifiedMemoryManager private[memory] (
    * task has a chance to ramp up to at least 1 / 2N of the total memory pool (where N is the # of
    * active tasks) before it is forced to spill. This can happen if the number of tasks increase
    * but an older task had a lot of memory already.
+    *
+    * 获取执行内存
    */
   override private[memory] def acquireExecutionMemory(
       numBytes: Long,
@@ -93,6 +95,11 @@ private[spark] class UnifiedMemoryManager private[memory] (
       memoryMode: MemoryMode): Long = synchronized {
     assertInvariants()
     assert(numBytes >= 0)
+    /**
+      * 根据内存模式获取UnifiedMemoryManager中管理的堆上或堆外的
+      * 执行内存池（executionPool）、存储内存池（storagePool）、
+      * 存储区域大小（storageRegionSize）、内存最大值（maxMemory）。
+      */
     val (executionPool, storagePool, storageRegionSize, maxMemory) = memoryMode match {
       case MemoryMode.ON_HEAP => (
         onHeapExecutionMemoryPool,
@@ -112,6 +119,12 @@ private[spark] class UnifiedMemoryManager private[memory] (
      * When acquiring memory for a task, the execution pool may need to make multiple
      * attempts. Each attempt must be able to evict storage in case another task jumps in
      * and caches a large block between the attempts. This is called once per attempt.
+      *
+      * 此函数用于借用或收回存储内存。
+      *
+      * 如果存储内存池的空闲空间大于存储内存池从执行内存池借用的空间大小，
+      * 那么除了回收被借用的空间外，还会向存储池再借用一些空间；
+      * 如果存储池的空闲空间小于等于存储池从执行池借用的空间大小，那么只需要回收被借用的空间。
      */
     def maybeGrowExecutionPool(extraMemoryNeeded: Long): Unit = {
       if (extraMemoryNeeded > 0) {
@@ -144,11 +157,18 @@ private[spark] class UnifiedMemoryManager private[memory] (
      * in execution memory allocation across tasks, Otherwise, a task may occupy more than
      * its fair share of execution memory, mistakenly thinking that other tasks can acquire
      * the portion of storage memory that cannot be evicted.
+      *
+      * 计算最大的执行内存池时，如果存储区域的边界大小大于已经被存储使用的内存，
+      * 那么执行内存的最大空间可以跨越存储内存与执行内存之间的“软”边界；
+      * 如果存储区域的边界大小小于等于已经被存储使用的内存，
+      * 这说明存储内存已经跨越了存储内存与执行内存之间的“软”边界，
+      * 执行内存可以收回被存储内存借用的空间。
      */
     def computeMaxExecutionPoolSize(): Long = {
       maxMemory - math.min(storagePool.memoryUsed, storageRegionSize)
     }
 
+    // 调用ExecutionMemoryPool的acquireMemory()方法，给taskAttemptId对应的TaskAttempt获取指定大小的内存。
     executionPool.acquireMemory(
       numBytes, taskAttemptId, maybeGrowExecutionPool, computeMaxExecutionPoolSize)
   }

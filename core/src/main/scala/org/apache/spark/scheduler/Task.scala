@@ -43,15 +43,23 @@ import org.apache.spark.util._
  * and divides the task output to multiple buckets (based on the task's partitioner).
  *
  * @param stageId id of the stage this task belongs to
+  *                Task所属Stage的身份标识
  * @param stageAttemptId attempt id of the stage this task belongs to
+  *                       Stage尝试的身份标识
  * @param partitionId index of the number in the RDD
+  *                    Task对应的分区索引
  * @param metrics a `TaskMetrics` that is created at driver side and sent to executor side.
+  *                用于跟踪Task执行过程的度量信息，类型为TaskMetric
  * @param localProperties copy of thread-local properties set by the user on the driver side.
+  *                        Task执行所需的属性信息
  *
  * The parameters below are optional:
  * @param jobId id of the job this task belongs to
+  *              Task所属Job的身份标识
  * @param appId id of the app this task belongs to
+  *              Task所属Application的身份标识，即SparkContext的_applicationId属性
  * @param appAttemptId attempt id of the app this task belongs to
+  *                     Task所属Application尝试的身份标识，即SparkContext的_applicationAttemptId属性
  */
 private[spark] abstract class Task[T](
     val stageId: Int,
@@ -66,6 +74,8 @@ private[spark] abstract class Task[T](
 
   /**
    * Called by [[org.apache.spark.executor.Executor]] to run this task.
+    *
+    * 模板方法，此方法是运行Task的入口
    *
    * @param taskAttemptId an identifier for this task attempt that is unique within a SparkContext.
    * @param attemptNumber how many times this task has been attempted (0 for the first attempt)
@@ -75,7 +85,9 @@ private[spark] abstract class Task[T](
       taskAttemptId: Long,
       attemptNumber: Int,
       metricsSystem: MetricsSystem): T = {
+    // // 将TaskAttempt注册到BlockInfoManager
     SparkEnv.get.blockManager.registerTask(taskAttemptId)
+    // 创建TaskAttempt的上下文
     context = new TaskContextImpl(
       stageId,
       partitionId,
@@ -85,22 +97,32 @@ private[spark] abstract class Task[T](
       localProperties,
       metricsSystem,
       metrics)
+
+    // 将任务尝试的上下文保存到ThreadLocal中
     TaskContext.setTaskContext(context)
+    // 获取运行任务尝试的线程
     taskThread = Thread.currentThread()
 
     if (_killed) {
+      // 如果任务尝试已经被kill，则将任务尝试及其上下文标记为被kill的状态
       kill(interruptThread = false)
     }
 
+    // 创建调用者上下文
     new CallerContext("TASK", appId, appAttemptId, jobId, Option(stageId), Option(stageAttemptId),
       Option(taskAttemptId), Option(attemptNumber)).setCurrentContext()
 
     try {
+      // 调用子类实现的runTask方法运行任务尝试
       runTask(context)
     } catch {
       case e: Throwable =>
         // Catch all errors; run task failure callbacks, and rethrow the exception.
         try {
+          /**
+            * 捕获到任何错误，调用TaskContextImpl的markTaskFailed()方法，
+            * 执行所有TaskFailureListener的onTaskFailure()方法。
+            */
           context.markTaskFailed(e)
         } catch {
           case t: Throwable =>
@@ -109,10 +131,13 @@ private[spark] abstract class Task[T](
         throw e
     } finally {
       // Call the task completion callbacks.
+      // 无论任务尝试是否成功，都会执行所有TaskCompletionListener的onTaskCompletion()方法
       context.markTaskCompleted()
       try {
+        //释放任务尝试所占用的堆内存和堆外内存
         Utils.tryLogNonFatalError {
           // Release memory used by this thread for unrolling blocks
+          // 释放任务尝试所占用的堆内存和堆外内存，以便唤醒任何等待MemoryManager管理的执行内存的任务尝试
           SparkEnv.get.blockManager.memoryStore.releaseUnrollMemoryForThisTask(MemoryMode.ON_HEAP)
           SparkEnv.get.blockManager.memoryStore.releaseUnrollMemoryForThisTask(MemoryMode.OFF_HEAP)
           // Notify any tasks waiting for execution memory to be freed to wake up and try to
@@ -123,51 +148,68 @@ private[spark] abstract class Task[T](
           memoryManager.synchronized { memoryManager.notifyAll() }
         }
       } finally {
+        // 移除ThreadLocal中保存的当前任务尝试线程的上下文
         TaskContext.unset()
       }
     }
   }
 
+  // Task内存管理器TaskMemoryManager
   private var taskMemoryManager: TaskMemoryManager = _
 
+  // 用于设置Task的taskMemoryManager
   def setTaskMemoryManager(taskMemoryManager: TaskMemoryManager): Unit = {
     this.taskMemoryManager = taskMemoryManager
   }
 
+  // 运行Task的接口
   def runTask(context: TaskContext): T
 
+  // 获取当前Task偏好的位置信息
   def preferredLocations: Seq[TaskLocation] = Nil
 
   // Map output tracker epoch. Will be set by TaskScheduler.
+  // MapOutputTracker跟踪的年代信息。此属性由TaskScheduler设置，用于故障迁移。
   var epoch: Long = -1
 
   // Task context, to be initialized in run().
+  // Task执行的上下文信息，即TaskContextImpl。TaskContextImpl将被设置到ThreadLocal中，以保证其线程安全。
   @transient protected var context: TaskContextImpl = _
 
   // The actual Thread on which the task is running, if any. Initialized in run().
+  // 运行任务尝试的线程
   @volatile @transient private var taskThread: Thread = _
 
   // A flag to indicate whether the task is killed. This is used in case context is not yet
   // initialized when kill() is invoked.
+  // Task是否被kill的状态
   @volatile @transient private var _killed = false
 
+  // 对RDD进行反序列化所花费的时间
   protected var _executorDeserializeTime: Long = 0
+  // 对RDD进行反序列化所花费的CPU时间
   protected var _executorDeserializeCpuTime: Long = 0
 
   /**
    * Whether the task has been killed.
+    *
+    * 用于判断任务尝试是否已被杀死，实际返回了Task的_killed属性
    */
   def killed: Boolean = _killed
 
   /**
    * Returns the amount of time spent deserializing the RDD and function to be run.
+    * 用于获取Task的_executorDeserializeTime属性
    */
   def executorDeserializeTime: Long = _executorDeserializeTime
+  // 用于获取Task的_executorDeserializeCpuTime
   def executorDeserializeCpuTime: Long = _executorDeserializeCpuTime
 
   /**
    * Collect the latest values of accumulators used in this task. If the task failed,
    * filter out the accumulators whose values should not be included on failures.
+    *
+    * 收集Task使用的累加器的最新值，并更新到TaskMetrics中。
    */
   def collectAccumulatorUpdates(taskFailed: Boolean = false): Seq[AccumulatorV2[_, _]] = {
     if (context != null) {
@@ -189,13 +231,17 @@ private[spark] abstract class Task[T](
    * code and user code to properly handle the flag. This function should be idempotent so it can
    * be called multiple times.
    * If interruptThread is true, we will also call Thread.interrupt() on the Task's executor thread.
+    *
+    * 用于kill任务尝试线程
    */
   def kill(interruptThread: Boolean) {
+    // 将Task和TaskContextImpl标记为已经被kill
     _killed = true
     if (context != null) {
       context.markInterrupted()
     }
-    if (interruptThread && taskThread != null) {
+    if (interruptThread && taskThread != null) { // 如果interruptThread为true
+      // 会利用Java线程的中断机制中断任务尝试线程
       taskThread.interrupt()
     }
   }

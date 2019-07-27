@@ -87,6 +87,8 @@ private[memory] class ExecutionMemoryPool(
    * task has a chance to ramp up to at least 1 / 2N of the total memory pool (where N is the # of
    * active tasks) before it is forced to spill. This can happen if the number of tasks increase
    * but an older task had a lot of memory already.
+    *
+    * 用于给taskAttemptId对应的TaskAttempt获取指定大小（即numBytes）的内存
    *
    * @param numBytes number of bytes to acquire
    * @param taskAttemptId the task attempt acquiring memory
@@ -112,9 +114,11 @@ private[memory] class ExecutionMemoryPool(
 
     // Add this task to the taskMemory map just so we can keep an accurate count of the number
     // of active tasks, to let other tasks ramp down their memory in calls to `acquireMemory`
-    if (!memoryForTask.contains(taskAttemptId)) {
+    if (!memoryForTask.contains(taskAttemptId)) { // 如果memoryForTask中还没有记录taskAttemptId
+      // 将taskAttemptId放入memoryForTask，初始状态taskAttemptId所消费的内存为0
       memoryForTask(taskAttemptId) = 0L
       // This will later cause waiting tasks to wake up and check numTasks again
+      // 唤醒其他等待获取ExecutionMemoryPool的锁的线程
       lock.notifyAll()
     }
 
@@ -123,12 +127,15 @@ private[memory] class ExecutionMemoryPool(
     // memory to give it (we always let each task get at least 1 / (2 * numActiveTasks)).
     // TODO: simplify this to limit each task to its own slot
     while (true) {
+      // 获取当前激活的Task的数量
       val numActiveTasks = memoryForTask.keys.size
+      // 获取当前TaskAttempt所消费的内存
       val curMem = memoryForTask(taskAttemptId)
 
       // In every iteration of this loop, we should first try to reclaim any borrowed execution
       // space from storage. This is necessary because of the potential race condition where new
       // storage blocks may steal the free execution memory that this task was waiting for.
+      // 从StorageMemoryPool回收或借用内存
       maybeGrowPool(numBytes - memoryFree)
 
       // Maximum size the pool would have after potentially growing the pool.
@@ -136,13 +143,17 @@ private[memory] class ExecutionMemoryPool(
       // must take into account potential free memory as well as the amount this pool currently
       // occupies. Otherwise, we may run into SPARK-12155 where, in unified memory management,
       // we did not take into account space that could have been freed by evicting cached blocks.
+      // 计算内存池的最大大小
       val maxPoolSize = computeMaxPoolSize()
+      // 计算每个TaskAttempt最大可以使用的内存大小
       val maxMemoryPerTask = maxPoolSize / numActiveTasks
+      // 计算每个TaskAttempt最小保证使用的内存大小
       val minMemoryPerTask = poolSize / (2 * numActiveTasks)
 
       // How much we can grant this task; keep its share within 0 <= X <= 1 / numActiveTasks
       val maxToGrant = math.min(numBytes, math.max(0, maxMemoryPerTask - curMem))
       // Only give it as much memory as is free, which might be none if it reached 1 / numTasks
+      // 计算当前TaskAttempt真正可以申请获取的内存大小
       val toGrant = math.min(maxToGrant, memoryFree)
 
       // We want to let each task get at least 1 / (2 * numActiveTasks) before blocking;
@@ -150,8 +161,10 @@ private[memory] class ExecutionMemoryPool(
       // (this happens if older tasks allocated lots of memory before N grew)
       if (toGrant < numBytes && curMem + toGrant < minMemoryPerTask) {
         logInfo(s"TID $taskAttemptId waiting for at least 1/2N of $poolName pool to be free")
+        // 内存不足，使当前线程处于等待状态
         lock.wait()
       } else {
+        // 成功获取到toGrant指定大小的内存
         memoryForTask(taskAttemptId) += toGrant
         return toGrant
       }
@@ -161,9 +174,13 @@ private[memory] class ExecutionMemoryPool(
 
   /**
    * Release `numBytes` of memory acquired by the given task.
+    *
+    * 用于给taskAttemptId对应的TaskAttempt释放指定大小（即numBytes）的内存。
    */
   def releaseMemory(numBytes: Long, taskAttemptId: Long): Unit = lock.synchronized {
+    // 获取taskAttemptId代表的TaskAttempt消费的内存（即curMem）
     val curMem = memoryForTask.getOrElse(taskAttemptId, 0L)
+    // 计算能够释放的内存大小
     var memoryToFree = if (curMem < numBytes) {
       logWarning(
         s"Internal error: release called on $numBytes bytes but task only has $curMem bytes " +
@@ -172,22 +189,35 @@ private[memory] class ExecutionMemoryPool(
     } else {
       numBytes
     }
-    if (memoryForTask.contains(taskAttemptId)) {
+
+    /**
+      * taskAttemptId代表的TaskAttempt占用的内存大小减去memoryToFree。
+      * 如果taskAttemptId代表的TaskAttempt占用的内存大小小于等于零，
+      * 还需要将taskAttemptId与所消费内存的映射关系从memoryForTask中清除。
+      */
+    if (memoryForTask.contains(taskAttemptId)) { // 释放内存（逻辑内存）
       memoryForTask(taskAttemptId) -= memoryToFree
       if (memoryForTask(taskAttemptId) <= 0) {
         memoryForTask.remove(taskAttemptId)
       }
     }
+    // 唤醒所有申请获得内存，但是处于等待状态的线程
     lock.notifyAll() // Notify waiters in acquireMemory() that memory has been freed
   }
 
   /**
    * Release all memory for the given task and mark it as inactive (e.g. when a task ends).
+    *
+    * 用于释放taskAttemptId对应的TaskAttempt所消费的所有内存。
+    *
    * @return the number of bytes freed.
    */
   def releaseAllMemoryForTask(taskAttemptId: Long): Long = lock.synchronized {
+    // 获取taskAttemptId对应的TaskAttempt消费的内存
     val numBytesToFree = getMemoryUsageForTask(taskAttemptId)
+    // 进行释放
     releaseMemory(numBytesToFree, taskAttemptId)
+    // 返回释放的内存大小
     numBytesToFree
   }
 
