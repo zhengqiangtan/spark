@@ -59,6 +59,11 @@ import org.apache.spark.util.Utils;
  * Unlike {@link org.apache.spark.util.collection.ExternalSorter}, this sorter does not merge its
  * spill files. Instead, this merging is performed in {@link UnsafeShuffleWriter}, which uses a
  * specialized merge procedure that avoids extra serialization/deserialization.
+ *
+ * ShuffleExternalSorter是专门用于对Shuffle数据进行排序的外部排序器，用于将map任务的输出存储到Tungsten中；
+ * 在记录超过限制时，将数据溢出到磁盘。
+ * 与ExternalSorter不同，ShuffleExternalSorter本身并没有实现数据的持久化功能，
+ * 具体的持久化将由ShuffleExternalSorter的调用者UnsafeShuffleWriter来实现。
  */
 final class ShuffleExternalSorter extends MemoryConsumer {
 
@@ -67,19 +72,28 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   @VisibleForTesting
   static final int DISK_WRITE_BUFFER_SIZE = 1024 * 1024;
 
+  // 分区数量
   private final int numPartitions;
   private final TaskMemoryManager taskMemoryManager;
   private final BlockManager blockManager;
   private final TaskContext taskContext;
+
+  // 对Shuffle写入（也就是map任务输出到磁盘）的度量，即Shuffle WriteMetrics。
   private final ShuffleWriteMetrics writeMetrics;
 
   /**
    * Force this sorter to spill when there are this many elements in memory. The default value is
    * 1024 * 1024 * 1024, which allows the maximum size of the pointer array to be 8G.
+   *
+   * 磁盘溢出的元素数量。
+   * 可通过spark.shuffle.spill.numElementsForceSpillThreshold属性进行配置，默认为1MB。
    */
   private final long numElementsForSpillThreshold;
 
-  /** The buffer size to use when writing spills using DiskBlockObjectWriter */
+  /** The buffer size to use when writing spills using DiskBlockObjectWriter
+   * 创建的DiskBlockObjectWriter内部的文件缓冲大小。
+   * 可通过spark.shuffle.file.buffer属性进行配置，默认是32KB。
+   **/
   private final int fileBufferSizeBytes;
 
   /**
@@ -87,17 +101,25 @@ final class ShuffleExternalSorter extends MemoryConsumer {
    * spilling, although in principle we could recycle these pages across spills (on the other hand,
    * this might not be necessary if we maintained a pool of re-usable pages in the TaskMemoryManager
    * itself).
+   *
+   * 已经分配的Page（即MemoryBlock）列表
    */
   private final LinkedList<MemoryBlock> allocatedPages = new LinkedList<>();
 
+  // 溢出文件的元数据信息的列表
   private final LinkedList<SpillInfo> spills = new LinkedList<>();
 
-  /** Peak memory used by this sorter so far, in bytes. **/
+  /** Peak memory used by this sorter so far, in bytes.
+   * 内存中数据结构大小的峰值（单位为字节）。
+   **/
   private long peakMemoryUsedBytes;
 
   // These variables are reset after spilling:
+  // 用于在内存中对插入的记录进行排序。
   @Nullable private ShuffleInMemorySorter inMemSorter;
+  // 当前的Page（即MemoryBlock）。
   @Nullable private MemoryBlock currentPage = null;
+  // Page的光标。实际为用于向Tungsten写入数据时的地址信息。
   private long pageCursor = -1;
 
   ShuffleExternalSorter(
@@ -238,6 +260,8 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
   /**
    * Sort and spill the current records in response to memory pressure.
+   *
+   * 将数据溢出到磁盘。
    */
   @Override
   public long spill(long size, MemoryConsumer trigger) throws IOException {
@@ -251,13 +275,22 @@ final class ShuffleExternalSorter extends MemoryConsumer {
       spills.size(),
       spills.size() > 1 ? " times" : " time");
 
+    /**
+     * 将内存中的记录进行排序后输出到磁盘。这里用到的排序方式有两种：
+     * 1. 对分区ID进行比较的排序；
+     * 2. 采用了基数排序（Radix Sort）。
+     */
     writeSortedFile(false);
+    // 将所使用的Page（即MemoryBlock）全部释放
     final long spillSize = freeMemory();
+    // 重置ShuffleMemorySorter底层的长整型数组，便于下次排序
     inMemSorter.reset();
     // Reset the in-memory sorter's pointer array only after freeing up the memory pages holding the
     // records. Otherwise, if the task is over allocated memory, then without freeing the memory
     // pages, we might not be able to get memory for the pointer array.
+    // 更新任务度量信息
     taskContext.taskMetrics().incMemoryBytesSpilled(spillSize);
+    // 返回溢出的数据大小
     return spillSize;
   }
 
@@ -364,30 +397,48 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
   /**
    * Write a record to the shuffle sorter.
+   *
+   * map任务在执行结束后会将数据写入磁盘，等待reduce任务获取。
+   * 在写入磁盘之前，Spark可能会对map任务的输出在内存中进行一些排序和聚合。
+   * insertRecord()方法是这一过程的入口
    */
   public void insertRecord(Object recordBase, long recordOffset, int length, int partitionId)
     throws IOException {
 
     // for tests
     assert(inMemSorter != null);
+    // 判断ShuffleInMemorySorter中的记录数大于等于numElementsForSpillThreshold
     if (inMemSorter.numRecords() >= numElementsForSpillThreshold) {
       logger.info("Spilling data because number of spilledRecords crossed the threshold " +
         numElementsForSpillThreshold);
+      // 如果是，则将数据溢出到磁盘
       spill();
     }
 
+    // 检查是否有足够的空间将额外的记录插入到排序指针数组中，如果需要额外的空间，则增加数组的容量；
+    // 如果无法获取所需的空间，则内存中的数据将被溢出到磁盘。
     growPointerArrayIfNecessary();
     // Need 4 bytes to store the record length.
-    final int required = length + 4;
+    final int required = length + 4; // 4字节用于在内存中存储数据的长度
+
+    // 检查是否有足够的空间，如果需要额外的空间，则申请分配新的Page
     acquireNewPageIfNecessary(required);
 
     assert(currentPage != null);
     final Object base = currentPage.getBaseObject();
+    // 返回页号和相对于内存块起始地址的偏移量（64位长整型）。
     final long recordAddress = taskMemoryManager.encodePageNumberAndOffset(currentPage, pageCursor);
+
+    // 向Page所代表的内存块的起始地址写入数据的长度
     Platform.putInt(base, pageCursor, length);
     pageCursor += 4;
+
+    // 将数据拷贝到Page中
     Platform.copyMemory(recordBase, recordOffset, base, pageCursor, length);
     pageCursor += length;
+
+    // 将记录的元数据信息存储到内部用的长整型数组中，以便于排序。
+    // 其中高24位存储分区ID，中间13位存储页号，低27位存储偏移量。
     inMemSorter.insertRecord(recordAddress, partitionId);
   }
 
