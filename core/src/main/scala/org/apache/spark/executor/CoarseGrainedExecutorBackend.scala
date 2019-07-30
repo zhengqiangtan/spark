@@ -36,6 +36,19 @@ import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
 import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.{ThreadUtils, Utils}
 
+/**
+  * CoarseGrainedExecutorBackend是Driver与Executor通信的后端接口，但只在local-cluster和Standalone模式下才会使用。
+  * 由于CoarseGrainedExecutorBackend作为单独的进程存在，所以CoarseGrainedExecutorBackend的伴生对象中实现了main()方法。
+  * 在main()方法中将创建CoarseGrainedExecutorBackend实例。
+  *
+  * @param rpcEnv
+  * @param driverUrl Driver的Spark格式的URL。例如，spark://CoarseGrainedScheduler@host:port。
+  * @param executorId Master分配给Executor的身份标识
+  * @param hostname 主机名
+  * @param cores 分配给Executor的内核数
+  * @param userClassPath 用户指定的类路径
+  * @param env Executor所需的SparkEnv
+  */
 private[spark] class CoarseGrainedExecutorBackend(
     override val rpcEnv: RpcEnv,
     driverUrl: String,
@@ -46,19 +59,28 @@ private[spark] class CoarseGrainedExecutorBackend(
     env: SparkEnv)
   extends ThreadSafeRpcEndpoint with ExecutorBackend with Logging {
 
+  // 标记CoarseGrainedExecutorBackend是否正在停止
   private[this] val stopping = new AtomicBoolean(false)
+  // Executor实例
   var executor: Executor = null
+  // DriverEndpoint的RpcEndpointRef
   @volatile var driver: Option[RpcEndpointRef] = None
 
   // If this CoarseGrainedExecutorBackend is changed to support multiple threads, then this may need
   // to be changed so that we don't share the serializer instance across threads
+  // Executor所需的SparkEnv中的closureSerializer的实例
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
 
+  /**
+    * 在创建CoarseGrainedExecutorBackend时，并将它注册到Executor自身的RpcEnv中。
+    * 在注册到RpcEnv的过程中会触发对CoarseGrainedExecutorBackend的onStart()方法的调用。
+    */
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
+      // 向DriverEndpoint发送RegisterExecutor消息注册Executor
       ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, cores, extractLogUrls))
     }(ThreadUtils.sameThread).onComplete {
       // This is a very fast action so we can use "ThreadUtils.sameThread"
@@ -75,6 +97,7 @@ private[spark] class CoarseGrainedExecutorBackend(
       .map(e => (e._1.substring(prefix.length).toLowerCase, e._2))
   }
 
+  // 接收消息，对RegisteredExecutor、LaunchTask、KillTask、StopExecutor等消息进行处理
   override def receive: PartialFunction[Any, Unit] = {
     case RegisteredExecutor =>
       logInfo("Successfully registered with driver")
@@ -136,6 +159,10 @@ private[spark] class CoarseGrainedExecutorBackend(
     }
   }
 
+  /**
+    * 在Standalone模式下，由于CoarseGrainedExecutorBackend与Executor在同一个进程内，所以它对Task的状态能够准确实时地捕获。
+    * 利用这一优势，CoarseGrainedExecutorBackend可以将Task的状态发送给DriverEndpoint，以便对Task的状态进行更新。
+    */
   override def statusUpdate(taskId: Long, state: TaskState, data: ByteBuffer) {
     val msg = StatusUpdate(executorId, taskId, state, data)
     driver match {
@@ -190,8 +217,10 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
       Utils.checkHost(hostname)
 
       // Bootstrap to fetch the driver's Spark properties.
+      // 从CoarseGrainedSchedulerBackend获取所需的Spark属性信息和密钥
       val executorConf = new SparkConf
       val port = executorConf.getInt("spark.executor.port", 0)
+      // 创建名为driverPropsFetcher的RpcEnv。此RpcEnv主要用于从Driver拉取属性信息，并非Executor的SparkEnv中的RpcEnv。
       val fetcher = RpcEnv.create(
         "driverPropsFetcher",
         hostname,
@@ -200,12 +229,17 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
         new SecurityManager(executorConf),
         clientMode = true)
       val driver = fetcher.setupEndpointRefByURI(driverUrl)
+
+      // 向DriverEndpoint发送RetrieveSparkAppConfig消息，从CoarseGrainedSchedulerBackend获取所需的Spark属性信息和密钥。
       val cfg = driver.askWithRetry[SparkAppConfig](RetrieveSparkAppConfig)
+      // 将CoarseGrainedSchedulerBackend回复的SparkAppConfig消息中携带的Spark属性和Application的ID属性保存到props中。
       val props = cfg.sparkProperties ++ Seq[(String, String)](("spark.app.id", appId))
       fetcher.shutdown()
 
       // Create SparkEnv using properties we fetched from the driver.
+      // 创建Executor自己的SparkConf，内部参数都是从Driver获取的。
       val driverConf = new SparkConf()
+      // 将props中的属性全部保存到SparkConf中
       for ((key, value) <- props) {
         // this is required for SSL in standalone mode
         if (SparkConf.isExecutorStartupConf(key)) {
@@ -220,11 +254,19 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
         SparkHadoopUtil.get.startCredentialUpdater(driverConf)
       }
 
+      // 创建Executor自身的SparkEnv
       val env = SparkEnv.createExecutorEnv(
         driverConf, executorId, hostname, port, cores, cfg.ioEncryptionKey, isLocal = false)
 
+      // 创建并注册CoarseGrainedExecutorBackend实例
       env.rpcEnv.setupEndpoint("Executor", new CoarseGrainedExecutorBackend(
         env.rpcEnv, driverUrl, executorId, hostname, cores, userClassPath, env))
+      /**
+        * 创建并注册WorkerWatcher实例。WorkerWatcher是Worker的守望者，
+        * 当发生Worker进程退出、连接断开、网络出错等情况时，
+        * 终止CoarseGrainedExecutorBackend进程。
+        * Worker与CoarseGrainedExecutorBackend进程相辅相成。
+        */
       workerUrl.foreach { url =>
         env.rpcEnv.setupEndpoint("WorkerWatcher", new WorkerWatcher(env.rpcEnv, url))
       }
@@ -242,6 +284,7 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
     var workerUrl: Option[String] = None
     val userClassPath = new mutable.ListBuffer[URL]()
 
+    // 对执行参数进行解析
     var argv = args.toList
     while (!argv.isEmpty) {
       argv match {
@@ -276,11 +319,13 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
       }
     }
 
+    // 检查参数是否合法，不合法则打印使用方式并退出
     if (driverUrl == null || executorId == null || hostname == null || cores <= 0 ||
       appId == null) {
       printUsageAndExit()
     }
 
+    // 将解析得到的变量作为参数，调用run()方法
     run(driverUrl, executorId, hostname, cores, appId, workerUrl, userClassPath)
     System.exit(0)
   }

@@ -82,15 +82,18 @@ private[deploy] class DriverRunner(
       override def run() {
         var shutdownHook: AnyRef = null
         try {
+          // JVM关闭钩子
           shutdownHook = ShutdownHookManager.addShutdownHook { () =>
             logInfo(s"Worker shutting down, killing driver $driverId")
             kill()
           }
 
           // prepare driver jars and run driver
+          // 准备并允许Driver
           val exitCode = prepareAndRunDriver()
 
           // set final state depending on if forcibly killed and process exit code
+          // 根据退出状态码来决定最终状态
           finalState = if (exitCode == 0) {
             Some(DriverState.FINISHED)
           } else if (killed) {
@@ -168,9 +171,15 @@ private[deploy] class DriverRunner(
   }
 
   private[worker] def prepareAndRunDriver(): Int = {
+    // 创建Driver的工作目录
     val driverDir = createWorkingDirectory()
+    // 下载用户指定的Jar包文件
     val localJarFilename = downloadUserJar(driverDir)
 
+    /**
+      * 将DriverDescription的command属性（即Command）的arguments属性中每个参数中的变量替换为指定的值
+      * 例如，将{WORKER_URL}替换为DriverRunner的workerUrl属性。
+      */
     def substituteVariables(argument: String): String = argument match {
       case "{{WORKER_URL}}" => workerUrl
       case "{{USER_JAR}}" => localJarFilename
@@ -178,9 +187,15 @@ private[deploy] class DriverRunner(
     }
 
     // TODO: If we add ability to submit multiple jars they should also be added here
+    /**
+      * 构造ProcessBuilder，进程命令将由DriverDescription的command属性决定。
+      * ProcessBuilder执行java命令的主类是org.apache.spark.deploy.worker.DriverWrapper
+      * 这里传入了substituteVariables()方法作为substituteArguments参数
+      */
     val builder = CommandUtils.buildProcessBuilder(driverDesc.command, securityManager,
       driverDesc.mem, sparkHome.getAbsolutePath, substituteVariables)
 
+    // 调用runDriver方法运行Driver
     runDriver(builder, driverDir, driverDesc.supervise)
   }
 
