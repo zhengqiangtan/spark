@@ -1985,6 +1985,8 @@ class SparkContext(config: SparkConf) extends Logging {
     Utils.tryLogNonFatalError {
       _eventLogger.foreach(_.stop())
     }
+
+    // 停止DAGScheduler
     if (_dagScheduler != null) {
       Utils.tryLogNonFatalError {
         _dagScheduler.stop()
@@ -2781,10 +2783,12 @@ object SparkContext extends Logging {
     }
   }
 
+  // 获取集群管理器
   private def getClusterManager(url: String): Option[ExternalClusterManager] = {
+    // 通过类加载器加载所有实现了特质ExternalClusterManager的类
     val loader = Utils.getContextOrSparkClassLoader
-    val serviceLoaders =
-      ServiceLoader.load(classOf[ExternalClusterManager], loader).asScala.filter(_.canCreate(url))
+    val serviceLoaders = ServiceLoader.load(classOf[ExternalClusterManager], loader).asScala
+      .filter(_.canCreate(url)) // 调用实现的canCreate()方法进行过滤
     if (serviceLoaders.size > 1) {
       throw new SparkException(
         s"Multiple external cluster managers registered for the url $url: $serviceLoaders")

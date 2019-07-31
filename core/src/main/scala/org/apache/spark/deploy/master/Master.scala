@@ -705,6 +705,7 @@ private[deploy] class Master(
     // The disconnected client could've been either a worker or an app; remove whichever it was
     logInfo(s"$address got disassociated, removing it.")
     addressToWorker.get(address).foreach(removeWorker)
+    // 调用finishApplication()方法处理Application
     addressToApp.get(address).foreach(finishApplication)
     if (state == RecoveryState.RECOVERING && canCompleteRecovery) { completeRecovery() }
   }
@@ -1199,6 +1200,7 @@ private[deploy] class Master(
   }
 
   private def finishApplication(app: ApplicationInfo) {
+    // 调用了removeApplication()方法移除Application及分配给Application的Executor
     removeApplication(app, ApplicationState.FINISHED)
   }
 

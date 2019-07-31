@@ -326,6 +326,7 @@ private[spark] class ApplicationMaster(
     sparkContextPromise.success(sc)
   }
 
+  // 向YARN注册AM
   private def registerAM(
       _sparkConf: SparkConf,
       _rpcEnv: RpcEnv,
@@ -751,6 +752,7 @@ object ApplicationMaster extends Logging {
 
   def main(args: Array[String]): Unit = {
     SignalUtils.registerLogger(log)
+    // 解析参数
     val amArgs = new ApplicationMasterArguments(args)
 
     // Load the properties file with the Spark configuration and set entries as system properties,
@@ -762,6 +764,7 @@ object ApplicationMaster extends Logging {
       }
     }
     SparkHadoopUtil.get.runAsSparkUser { () =>
+      // 创建ApplicationMaster并调用run()方法
       master = new ApplicationMaster(amArgs, new YarnRMClient)
       System.exit(master.run())
     }

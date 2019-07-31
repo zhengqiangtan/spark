@@ -1844,6 +1844,7 @@ class DAGScheduler(
   def stop() {
     messageScheduler.shutdownNow()
     eventProcessLoop.stop()
+    // 调用了TaskScheduler的stop()方法
     taskScheduler.stop()
   }
 

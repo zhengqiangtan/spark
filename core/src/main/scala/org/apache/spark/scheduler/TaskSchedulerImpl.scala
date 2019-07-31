@@ -572,6 +572,7 @@ private[spark] class TaskSchedulerImpl(
 
   override def stop() {
     speculationScheduler.shutdown()
+    // 调用了SchedulerBackend的stop()方法
     if (backend != null) {
       backend.stop()
     }

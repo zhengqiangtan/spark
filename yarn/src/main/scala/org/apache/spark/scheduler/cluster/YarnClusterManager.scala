@@ -29,6 +29,7 @@ private[spark] class YarnClusterManager extends ExternalClusterManager {
     masterURL == "yarn"
   }
 
+  // 根据部署模式创建TaskScheduler
   override def createTaskScheduler(sc: SparkContext, masterURL: String): TaskScheduler = {
     sc.deployMode match {
       case "cluster" => new YarnClusterScheduler(sc)
@@ -37,6 +38,7 @@ private[spark] class YarnClusterManager extends ExternalClusterManager {
     }
   }
 
+  // 根据部署模式创建SchedulerBackend
   override def createSchedulerBackend(sc: SparkContext,
       masterURL: String,
       scheduler: TaskScheduler): SchedulerBackend = {
@@ -50,7 +52,9 @@ private[spark] class YarnClusterManager extends ExternalClusterManager {
     }
   }
 
+  // 初始化
   override def initialize(scheduler: TaskScheduler, backend: SchedulerBackend): Unit = {
+    // 调用了TaskSchedulerImpl的initialize()方法进行初始化
     scheduler.asInstanceOf[TaskSchedulerImpl].initialize(backend)
   }
 }
