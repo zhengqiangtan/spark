@@ -56,20 +56,30 @@ import org.apache.spark.util.Utils
  * these optional arguments might be filled in during resolution using either inference or external
  * metadata.  For example, when reading a partitioned table from a file system, partition columns
  * will be inferred from the directory layout even if they are not specified.
+  *
+  * DataSource用于表示在Spark SQL中可插拔的数据源。
  *
+ * @param className 此名称用于决定要使用的类
  * @param paths A list of file system paths that hold data.  These will be globbed before and
  *              qualified. This option only works when reading from a [[FileFormat]].
+  *              数据源的多个路径
  * @param userSpecifiedSchema An optional specification of the schema of the data. When present
  *                            we skip attempting to infer the schema.
+  *                            用户指定的StructType
  * @param partitionColumns A list of column names that the relation is partitioned by. This list is
  *                         generally empty during the read path, unless this DataSource is managed
  *                         by Hive. In these cases, during `resolveRelation`, we will call
  *                         `getOrInferFileFormatSchema` for file based DataSources to infer the
  *                         partitioning. In other cases, if this list is empty, then this table
  *                         is unpartitioned.
+  *                         分区字段的序列
  * @param bucketSpec An optional specification for bucketing (hash-partitioning) of the data.
+  *                   BucketSpec是一种用于将数据集分解为更多可管理部分的技术。
+  *                   由于桶的数量是固定的，因此数据不会随数据而波动。
+ * @param options 保存选项
  * @param catalogTable Optional catalog table reference that can be used to push down operations
  *                     over the datasource to the catalog service.
+  *                     用于定义表的字典
  */
 case class DataSource(
     sparkSession: SparkSession,
@@ -83,8 +93,11 @@ case class DataSource(
 
   case class SourceInfo(name: String, schema: StructType, partitionColumns: Seq[String])
 
+  // 数据源的类。providingClass实际是以className为参数，调用DataSource伴生对象的lookupDataSource方法获得的。
   lazy val providingClass: Class[_] = DataSource.lookupDataSource(className)
+  // 用于表示数据源的名称和元数据信息
   lazy val sourceInfo = sourceSchema()
+  // 忽略大小写的选项配置。caseInsensitiveOptions实际是通过CaseInsensitiveMap对options的包装，以忽略配置的大小写。
   private val caseInsensitiveOptions = new CaseInsensitiveMap(options)
 
   /**
@@ -192,9 +205,12 @@ case class DataSource(
     (dataSchema, partitionSchema)
   }
 
-  /** Returns the name and schema of the source that can be used to continually read data. */
+  /** Returns the name and schema of the source that can be used to continually read data.
+    * 用于根据providingClass得到对应的SourceInfo
+    **/
   private def sourceSchema(): SourceInfo = {
-    providingClass.newInstance() match {
+    // 使用反射得到providingClass的实例
+    providingClass.newInstance() match { // 根据实例的类型构造SourceInfo
       case s: StreamSourceProvider =>
         val (name, schema) = s.sourceSchema(
           sparkSession.sqlContext, userSpecifiedSchema, className, caseInsensitiveOptions)
@@ -314,6 +330,8 @@ case class DataSource(
   /**
    * Create a resolved [[BaseRelation]] that can be used to read data from or write data into this
    * [[DataSource]]
+    *
+    * 用于根据数据源的提供类（providingClass）和userSpecifiedSchema创建读写数据源所需的BaseRelation
    *
    * @param checkFilesExist Whether to confirm that the files exist when generating the
    *                        non-streaming file based datasource. StructuredStreaming jobs already
@@ -501,7 +519,9 @@ case class DataSource(
 
 object DataSource {
 
-  /** A map to maintain backward compatibility in case we move data sources around. */
+  /** A map to maintain backward compatibility in case we move data sources around.
+    * 缓存了类名与对应的DataSourceRegister实现类之间的映射关系
+    **/
   private val backwardCompatibilityMap: Map[String, String] = {
     val jdbc = classOf[JdbcRelationProvider].getCanonicalName
     val json = classOf[JsonFileFormat].getCanonicalName
@@ -539,18 +559,24 @@ object DataSource {
     "org.apache.spark.sql.sources.HadoopFsRelationProvider",
     "org.apache.spark.Logging")
 
-  /** Given a provider name, look up the data source class definition. */
+  /** Given a provider name, look up the data source class definition.
+    * 根据指定的名字找到对应的数据源类的方法
+    **/
   def lookupDataSource(provider: String): Class[_] = {
+    // 查找指定名称对应的数据源类provider1
     val provider1 = backwardCompatibilityMap.getOrElse(provider, provider)
+    // 在provider1后拼接DefaultSource构成provider2
     val provider2 = s"$provider1.DefaultSource"
     val loader = Utils.getContextOrSparkClassLoader
     val serviceLoader = ServiceLoader.load(classOf[DataSourceRegister], loader)
 
     try {
+      // 使用类加载器找到与provider1匹配的数据源类
       serviceLoader.asScala.filter(_.shortName().equalsIgnoreCase(provider1)).toList match {
         // the provider format did not match any given registered aliases
         case Nil =>
           try {
+            // 如果未能找到与provider1匹配的数据源类，则尝试加载由provider1或provider2指定的类
             Try(loader.loadClass(provider1)).orElse(Try(loader.loadClass(provider2))) match {
               case Success(dataSource) =>
                 // Found the data source using fully qualified path

@@ -41,6 +41,7 @@ import org.apache.spark.util.SerializableConfiguration
  */
 class TextFileFormat extends TextBasedFileFormat with DataSourceRegister {
 
+  // 别名为"text"
   override def shortName(): String = "text"
 
   override def toString: String = "Text"

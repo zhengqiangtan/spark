@@ -32,6 +32,21 @@ import org.apache.spark.sql.types.StructType
  * class name.
  *
  * A new instance of this class will be instantiated each time a DDL call is made.
+  *
+  * DataSourceRegister是数据源的抽象，所有数据源都应该实现它。
+  *
+  * Spark中实现了大量的数据源提供者：
+  * - TextFileFormat：别名text
+  * - CSVFileFormat：别名csv
+  * - JsonFileFormat：别名json
+  * - OrFileFormat：别名orc
+  * - ParquetFileFormat：别名parquet
+  * - KafkaSourceProvider：别名kafka
+  * - JdbcRelationProvider：别名jdbc
+  * - SimpleTextSource：别名test
+  * - TextSocketSourceProvider：别名socket
+  * - ConsoleSinkProvider：别名console
+  * - LibSVMFileFormat：别名libsvm
  *
  * @since 1.5.0
  */
@@ -45,6 +60,8 @@ trait DataSourceRegister {
    * {{{
    *   override def shortName(): String = "parquet"
    * }}}
+    *
+    * 获取数据源提供者使用的格式或格式的别名
    *
    * @since 1.5.0
    */

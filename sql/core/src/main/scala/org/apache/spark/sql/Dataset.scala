@@ -58,6 +58,7 @@ private[sql] object Dataset {
     new Dataset(sparkSession, logicalPlan, implicitly[Encoder[T]])
   }
 
+  // 用于将逻辑执行计划LogicalPlan转换为泛型是Row的Dataset（即DataFrame）
   def ofRows(sparkSession: SparkSession, logicalPlan: LogicalPlan): DataFrame = {
     val qe = sparkSession.sessionState.executePlan(logicalPlan)
     qe.assertAnalyzed()
@@ -2544,7 +2545,11 @@ class Dataset[T] private[sql](
   lazy val rdd: RDD[T] = {
     val objectType = exprEnc.deserializer.dataType
     val deserialized = CatalystSerde.deserialize[T](logicalPlan)
-    sparkSession.sessionState.executePlan(deserialized).toRdd.mapPartitions { rows =>
+    // SessionState的executePlan()方法将逻辑执行计划封装为QueryExecution
+    sparkSession.sessionState.executePlan(deserialized)
+      // QueryExecution的toRdd方法将促使执行物理执行计划，并返回RDD[InternalRow]
+      .toRdd.mapPartitions { rows =>
+      // 调用RDD的mapPartitions方法将RDD封装为MapPartitionsRDD
       rows.map(_.get(0, objectType).asInstanceOf[T])
     }
   }
@@ -2558,6 +2563,9 @@ class Dataset[T] private[sql](
 
   /**
    * Returns the content of the Dataset as a `JavaRDD` of [[T]]s.
+    *
+    * 将Dataset内部的RDD转换为JavaRDD
+    *
    * @group basic
    * @since 1.6.0
    */

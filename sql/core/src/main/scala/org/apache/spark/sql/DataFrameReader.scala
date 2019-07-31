@@ -37,6 +37,8 @@ import org.apache.spark.sql.types.StructType
  * Interface used to load a [[Dataset]] from external storage systems (e.g. file systems,
  * key-value stores, etc). Use `SparkSession.read` to access this.
  *
+  * 通过外部数据源的格式（如text、CVS等）和数据结构加载Dataset
+  *
  * @since 1.4.0
  */
 @InterfaceStability.Stable
@@ -44,6 +46,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Specifies the input data source format.
+    *
+    * 用于设置输入数据源的格式
    *
    * @since 1.4.0
    */
@@ -56,6 +60,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    * Specifies the input schema. Some data sources (e.g. JSON) can infer the input schema
    * automatically from data. By specifying the schema here, the underlying data source can
    * skip the schema inference step, and thus speed up data loading.
+    *
+    * 用于设置用户指定的结构类型（StructType）
    *
    * @since 1.4.0
    */
@@ -66,6 +72,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Adds an input option for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 1.4.0
    */
@@ -76,6 +84,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Adds an input option for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 2.0.0
    */
@@ -83,6 +93,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Adds an input option for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 2.0.0
    */
@@ -90,6 +102,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Adds an input option for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 2.0.0
    */
@@ -97,6 +111,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * (Scala-specific) Adds input options for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 1.4.0
    */
@@ -107,6 +123,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
 
   /**
    * Adds input options for the underlying data source.
+    *
+    * 用于向extraOptions中添加选项
    *
    * @since 1.4.0
    */
@@ -128,6 +146,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
   /**
    * Loads input in as a `DataFrame`, for data sources that require a path (e.g. data backed by
    * a local or distributed file system).
+    *
+    * 用于将数据源的数据加载到DataFrame
    *
    * @since 1.4.0
    */
@@ -143,13 +163,16 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    */
   @scala.annotation.varargs
   def load(paths: String*): DataFrame = {
-    sparkSession.baseRelationToDataFrame(
+    sparkSession.baseRelationToDataFrame( // 将BaseRelation转换为DataFrame
+      // 构造DataSource实例
       DataSource.apply(
         sparkSession,
         paths = paths,
         userSpecifiedSchema = userSpecifiedSchema,
         className = source,
-        options = extraOptions.toMap).resolveRelation())
+        options = extraOptions.toMap)
+        // 解析得到BaseRelatio
+        .resolveRelation())
   }
 
   /**
@@ -478,6 +501,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    * Loads text files and returns a `DataFrame` whose schema starts with a string column named
    * "value", and followed by partitioned columns if there are any. See the documentation on
    * the other overloaded `text()` method for more details.
+    *
+    * 用于设置输入数据源的格式为text并加载数据
    *
    * @since 2.0.0
    */
@@ -508,6 +533,9 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
   /**
    * Loads text files and returns a [[Dataset]] of String. See the documentation on the
    * other overloaded `textFile()` method for more details.
+    *
+    * 用于设置输入数据源的格式为text文本文件并加载数据
+    *
    * @since 2.0.0
    */
   def textFile(path: String): Dataset[String] = {
@@ -539,17 +567,23 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
     if (userSpecifiedSchema.nonEmpty) {
       throw new AnalysisException("User specified schema not supported with `textFile`")
     }
-    text(paths : _*).select("value").as[String](sparkSession.implicits.newStringEncoder)
+    // 调用text方法将文本文件转换为DataFrame
+    text(paths : _*)
+      // 进行选择（投影）操作
+      .select("value").as[String](sparkSession.implicits.newStringEncoder)
   }
 
   ///////////////////////////////////////////////////////////////////////////////////////
   // Builder pattern config options
   ///////////////////////////////////////////////////////////////////////////////////////
 
+  // 输入数据源的格式。可通过spark.sql.sources.default属性配置，默认为parquet。
   private var source: String = sparkSession.sessionState.conf.defaultDataSourceName
 
+  // 用户指定的Schema，实际的类型是StructType。
   private var userSpecifiedSchema: Option[StructType] = None
 
+  // 用于保存额外的选项
   private var extraOptions = new scala.collection.mutable.HashMap[String, String]
 
 }

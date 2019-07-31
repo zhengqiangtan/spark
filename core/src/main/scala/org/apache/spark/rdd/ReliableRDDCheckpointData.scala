@@ -33,7 +33,9 @@ private[spark] class ReliableRDDCheckpointData[T: ClassTag](@transient private v
 
   // The directory to which the associated RDD has been checkpointed to
   // This is assumed to be a non-local path that points to some reliable storage
+  // 保存ReliableRDDCheckpointData所关联的RDD数据的检查点目录
   private val cpDir: String =
+    // 通过checkpointPath()方法生成
     ReliableRDDCheckpointData.checkpointPath(rdd.context, rdd.id)
       .map(_.toString)
       .getOrElse { throw new SparkException("Checkpoint dir must be specified.") }
@@ -53,11 +55,19 @@ private[spark] class ReliableRDDCheckpointData[T: ClassTag](@transient private v
   /**
    * Materialize this RDD and write its content to a reliable DFS.
    * This is called immediately after the first action invoked on this RDD has completed.
+    *
+    * 实现了父类的doCheckpoint()方法
    */
   protected override def doCheckpoint(): CheckpointRDD[T] = {
+    // 将RDD的数据保存到检查点目录
     val newRDD = ReliableCheckpointRDD.writeRDDToCheckpointDirectory(rdd, cpDir)
 
     // Optionally clean our checkpoint files if the reference is out of scope
+    /**
+      * 如果spark.cleaner.referenceTracking.cleanCheckpoints属性指定为true，
+      * 那么将生成的ReliableCheckpointRDD注册到SparkContext的子组件ContextCleaner的referenceBuffer中，
+      * 以便于ContextCleaner对ReliableCheckpointRDD进行清理。
+      */
     if (rdd.conf.getBoolean("spark.cleaner.referenceTracking.cleanCheckpoints", false)) {
       rdd.context.cleaner.foreach { cleaner =>
         cleaner.registerRDDCheckpointDataForCleanup(newRDD, rdd.id)
@@ -65,6 +75,7 @@ private[spark] class ReliableRDDCheckpointData[T: ClassTag](@transient private v
     }
 
     logInfo(s"Done checkpointing RDD ${rdd.id} to $cpDir, new parent is RDD ${newRDD.id}")
+    // 返回生成的ReliableCheckpointRDD
     newRDD
   }
 
@@ -72,7 +83,10 @@ private[spark] class ReliableRDDCheckpointData[T: ClassTag](@transient private v
 
 private[spark] object ReliableRDDCheckpointData extends Logging {
 
-  /** Return the path of the directory to which this RDD's checkpoint data is written. */
+  /** Return the path of the directory to which this RDD's checkpoint data is written.
+    * 用于在SparkContext的checkpointDir属性指定的RDD计算过程中保存检查点的目录下创建子目录，
+    * 作为保存ReliableRDDCheckpointData所关联的RDD数据的检查点目录。
+    **/
   def checkpointPath(sc: SparkContext, rddId: Int): Option[Path] = {
     sc.checkpointDir.map { dir => new Path(dir, s"rdd-$rddId") }
   }

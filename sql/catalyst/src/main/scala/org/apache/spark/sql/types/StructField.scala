@@ -25,10 +25,14 @@ import org.apache.spark.annotation.InterfaceStability
 /**
  * A field inside a StructType.
  * @param name The name of this field.
+  *             字段名称
  * @param dataType The data type of this field.
+  *                 数据类型
  * @param nullable Indicates if values of this field can be `null` values.
+  *                 是否允许为null
  * @param metadata The metadata of this field. The metadata should be preserved during
  *                 transformation if the content of the column is not modified, e.g, in selection.
+  *                 元数据
  *
  * @since 1.3.0
  */

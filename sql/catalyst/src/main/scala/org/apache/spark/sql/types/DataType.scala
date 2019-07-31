@@ -28,6 +28,8 @@ import org.apache.spark.util.Utils
 
 /**
  * The base type of all Spark SQL data types.
+  *
+  * DataType是Spark SQL的所有数据类型的基本类型，Spark SQL的所有数据类型都继承自DataType
  *
  * @since 1.3.0
  */

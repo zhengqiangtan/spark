@@ -315,11 +315,15 @@ abstract class RDD[T: ClassTag](
    * Internal method to this RDD; will read from cache if applicable, or otherwise compute it.
    * This should ''not'' be called by users directly, but is available for implementors of custom
    * subclasses of RDD.
+    *
+    * 迭代计算的入口
    */
   final def iterator(split: Partition, context: TaskContext): Iterator[T] = {
-    if (storageLevel != StorageLevel.NONE) {
+    if (storageLevel != StorageLevel.NONE) { // 如果RDD的存储级别（StorageLevel）不是NONE
+      // 调用getOrCompute()方法从这些存储中尝试获取计算结果
       getOrCompute(split, context)
-    } else {
+    } else { // RDD的存储级别（StorageLevel）是NONE，分区任务可能是初次执行且存储中还没有任务的执行结果
+      // 调用computeOrReadCheckpoint()方法计算或者从检查点恢复
       computeOrReadCheckpoint(split, context)
     }
   }
@@ -360,24 +364,42 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Compute an RDD partition or read it from a checkpoint if the RDD is checkpointing.
+    *
+    * 存在检查点时直接从检查点读取数据，否则需要调用compute()方法继续计算
    */
   private[spark] def computeOrReadCheckpoint(split: Partition, context: TaskContext): Iterator[T] =
   {
     if (isCheckpointedAndMaterialized) {
+      /**
+        * 如果checkpointData中保存了RDDCheckpointData且其检查点的状态（cpState）是Checkpointed，
+        * 那么调用firstParent()方法找到其父RDD，然后调用父RDD的iterator方法。
+        * 由于firstParent()中调用了dependencies，且当前RDD的父RDD实际是ReliableCheckpointRDD，
+        * 那么对ReliableCheckpointRDD的iterator()方法的调用最终将转变为
+        * 对ReliableCheckpointRDD的compute()方法的调用，从而从检查点文件读取之前保存的计算结果。
+        */
       firstParent[T].iterator(split, context)
     } else {
+      /**
+        * 如果checkpointData中没有保存RDDCheckpointData或
+        * 其检查点的状态（cpState）不是Checkpointed，
+        * 那么调用compute方法进行计算。
+        */
       compute(split, context)
     }
   }
 
   /**
    * Gets or computes an RDD partition. Used by RDD.iterator() when an RDD is cached.
+    *
+    * 获取或计算RDD的分区
    */
   private[spark] def getOrCompute(partition: Partition, context: TaskContext): Iterator[T] = {
     val blockId = RDDBlockId(id, partition.index)
     var readCachedBlock = true
     // This method is called on executors, so we need call SparkEnv.get instead of sc.env.
+    // 尝试从存储体系中获取RDD分区的Block
     SparkEnv.get.blockManager.getOrElseUpdate(blockId, storageLevel, elementClassTag, () => {
+      // 没有获取到则调用computeOrReadCheckpoint()从检查点获取
       readCachedBlock = false
       computeOrReadCheckpoint(partition, context)
     }) match {
@@ -385,6 +407,7 @@ abstract class RDD[T: ClassTag](
         if (readCachedBlock) {
           val existingMetrics = context.taskMetrics().inputMetrics
           existingMetrics.incBytesRead(blockResult.bytes)
+          // 将返回的BlockResult的data属性封装为InterruptibleIterator
           new InterruptibleIterator[T](context, blockResult.data.asInstanceOf[Iterator[T]]) {
             override def next(): T = {
               existingMetrics.incRecordsRead(1)
@@ -392,9 +415,11 @@ abstract class RDD[T: ClassTag](
             }
           }
         } else {
+          // 将返回的BlockResult的data属性封装为InterruptibleIterator
           new InterruptibleIterator(context, blockResult.data.asInstanceOf[Iterator[T]])
         }
       case Right(iter) =>
+        // 将返回的Iterator封装为InterruptibleIterator
         new InterruptibleIterator(context, iter.asInstanceOf[Iterator[T]])
     }
   }
@@ -411,6 +436,8 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Return a new RDD by applying a function to all elements of this RDD.
+    *
+    * 用于向RDD中的所有元素应用函数。
    */
   def map[U: ClassTag](f: T => U): RDD[U] = withScope {
     val cleanF = sc.clean(f)
@@ -420,6 +447,9 @@ abstract class RDD[T: ClassTag](
   /**
    *  Return a new RDD by first applying a function to all elements of this
    *  RDD, and then flattening the results.
+    *
+    *  用于向RDD中的所有元素应用函数，并对结果扁平化处理。
+    *  返回MapPartitionsRDD。
    */
   def flatMap[U: ClassTag](f: T => TraversableOnce[U]): RDD[U] = withScope {
     val cleanF = sc.clean(f)
@@ -832,6 +862,8 @@ abstract class RDD[T: ClassTag](
    *
    * `preservesPartitioning` indicates whether the input function preserves the partitioner, which
    * should be `false` unless this is a pair RDD and the input function doesn't modify the keys.
+    *
+    * 用于将RDD转换为MapPartitionsRDD
    */
   def mapPartitions[U: ClassTag](
       f: Iterator[T] => Iterator[U],
@@ -847,6 +879,8 @@ abstract class RDD[T: ClassTag](
    * [performance] Spark's internal mapPartitionsWithIndex method that skips closure cleaning.
    * It is a performance API to be used carefully only if we are sure that the RDD elements are
    * serializable and don't require closure cleaning.
+    *
+    * 用于创建一个将函数应用到RDD的每个分区的MapPartitionsRDD。由于此方法是私有的，所以只在Spark SQL内部使用。
    *
    * @param preservesPartitioning indicates whether the input function preserves the partitioner,
    * which should be `false` unless this is a pair RDD and the input function doesn't modify
@@ -879,6 +913,8 @@ abstract class RDD[T: ClassTag](
    *
    * `preservesPartitioning` indicates whether the input function preserves the partitioner, which
    * should be `false` unless this is a pair RDD and the input function doesn't modify the keys.
+    *
+    * 用于创建一个将与分区索引相关的函数应用到RDD的每个分区的MapPartitionsRDD
    */
   def mapPartitionsWithIndex[U: ClassTag](
       f: (Int, Iterator[T]) => Iterator[U],
@@ -957,6 +993,8 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Applies a function f to all elements of this RDD.
+    *
+    * 调用SparkContext的runJob方法提交将函数应用到RDD中所有元素的作业。
    */
   def foreach(f: T => Unit): Unit = withScope {
     val cleanF = sc.clean(f)
@@ -973,6 +1011,8 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Return an array that contains all of the elements in this RDD.
+    *
+    * 将调用SparkContext的runJob方法提交基于RDD的所有分区上的作业
    *
    * @note This method should only be used if the resulting array is expected to be small, as
    * all the data is loaded into the driver's memory.
@@ -1049,6 +1089,8 @@ abstract class RDD[T: ClassTag](
   /**
    * Reduces the elements of this RDD using the specified commutative and
    * associative binary operator.
+    *
+    * 按照指定的函数对RDD中的元素进行叠加操作
    */
   def reduce(f: (T, T) => T): T = withScope {
     val cleanF = sc.clean(f)
@@ -1580,14 +1622,18 @@ abstract class RDD[T: ClassTag](
    * RDDs will be removed. This function must be called before any job has been
    * executed on this RDD. It is strongly recommended that this RDD is persisted in
    * memory, otherwise saving it on a file will require recomputation.
+    *
+    * 对RDD进行Checkpoint操作
    */
   def checkpoint(): Unit = RDDCheckpointData.synchronized {
     // NOTE: we use a global lock here due to complexities downstream with ensuring
     // children RDD partitions point to the correct parent partitions. In the future
     // we should revisit this consideration.
+    // 给SparkContext指定checkpointDir是启用检查点机制的前提
     if (context.checkpointDir.isEmpty) {
       throw new SparkException("Checkpoint directory has not been set in the SparkContext")
     } else if (checkpointData.isEmpty) {
+      // 如果没有指定RDDCheckpointData，那么创建ReliableRDDCheckpointData
       checkpointData = Some(new ReliableRDDCheckpointData(this))
     }
   }
@@ -1729,7 +1775,9 @@ abstract class RDD[T: ClassTag](
     Option(sc.getLocalProperty(RDD.CHECKPOINT_ALL_MARKED_ANCESTORS))
       .map(_.toBoolean).getOrElse(false)
 
-  /** Returns the first parent RDD */
+  /** Returns the first parent RDD
+    * 找到父亲RDD
+    **/
   protected[spark] def firstParent[U: ClassTag]: RDD[U] = {
     dependencies.head.rdd.asInstanceOf[RDD[U]]
   }
@@ -1767,21 +1815,31 @@ abstract class RDD[T: ClassTag](
    * Performs the checkpointing of this RDD by saving this. It is called after a job using this RDD
    * has completed (therefore the RDD has been materialized and potentially stored in memory).
    * doCheckpoint() is called recursively on the parent RDDs.
+    *
+    * 用于将RDD的数据保存到检查点。私有方法，只能在RDD内部使用。
    */
   private[spark] def doCheckpoint(): Unit = {
     RDDOperationScope.withScope(sc, "checkpoint", allowNesting = false, ignoreParent = true) {
       if (!doCheckpointCalled) {
         doCheckpointCalled = true
-        if (checkpointData.isDefined) {
-          if (checkpointAllMarkedAncestors) {
+        if (checkpointData.isDefined) { // 如果checkpointData中保存了RDDCheckpointData
+          if (checkpointAllMarkedAncestors) { // 如果需要对祖先RDD保存检查点
             // TODO We can collect all the RDDs that needs to be checkpointed, and then checkpoint
             // them in parallel.
             // Checkpoint parents first because our lineage will be truncated after we
             // checkpoint ourselves
+            // 调用每个依赖的RDD的doCheckpoint()方法
             dependencies.foreach(_.rdd.doCheckpoint())
           }
+
+          /**
+            * 调用RDDCheckpointData的checkpoint()方法保存检查点。
+            * checkpointData是RDDCheckpointData的子类ReliableRDDCheckpointData，
+            * checkpointData的checkpoint()方法中将调用ReliableRDDCheckpointData的doCheckpoint()方法
+            */
           checkpointData.get.checkpoint()
-        } else {
+        } else { // 如果checkpointData中没有保存RDDCheckpointData
+          // 调用每个依赖的RDD的doCheckpoint()方法
           dependencies.foreach(_.rdd.doCheckpoint())
         }
       }
@@ -1791,6 +1849,8 @@ abstract class RDD[T: ClassTag](
   /**
    * Changes the dependencies of this RDD from its original parents to a new RDD (`newRDD`)
    * created from the checkpoint file, and forget its old dependencies and partitions.
+    *
+    * 标记RDD被Checkpoint了，会清空依赖和分区信息
    */
   private[spark] def markCheckpointed(): Unit = {
     clearDependencies()
@@ -1886,6 +1946,7 @@ abstract class RDD[T: ClassTag](
     Option(name).map(_ + " ").getOrElse(""), getClass.getSimpleName, id, getCreationSite)
 
   def toJavaRDD() : JavaRDD[T] = {
+    // 用于将RDD自己转换为JavaRDD
     new JavaRDD(this)(elementClassTag)
   }
 }

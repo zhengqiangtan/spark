@@ -32,6 +32,11 @@ import org.apache.spark.annotation.InterfaceStability
  *
  * The default constructor is private. User should use either [[MetadataBuilder]] or
  * `Metadata.fromJson()` to create Metadata instances.
+  *
+  * Metadata用来保存StructField的元数据信息，其本质是底层的Map[String，Any]。
+  *
+  * Metadata可以对Boolean、Long、Double、String、Metadata、Array[Boolean]、
+  * Array[Long]、Array[Double]、Array[String]和Array[Metadata]等类型的元数据进行存储或读取。
  *
  * @param map an immutable map that stores the data
  *

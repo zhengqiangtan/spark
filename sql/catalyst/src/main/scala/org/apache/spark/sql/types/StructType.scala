@@ -89,6 +89,9 @@ import org.apache.spark.util.Utils
  * val row = Row(Row(1, 2, true))
  * // row: Row = [[1,2,true]]
  * }}}
+  *
+  * 样例类StructType与样例类StructField共同构建起数据源的数据结构。
+  * 一个StructType可以包含多个StructField
  *
  * @since 1.3.0
  */

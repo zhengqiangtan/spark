@@ -68,6 +68,11 @@ import org.apache.spark.util.Utils
  *     .config("spark.some.config.option", "some-value")
  *     .getOrCreate()
  * }}}
+  *
+  * SparkSession为用户提供了一个统一的切入点来使用Spark的各项功能。
+  * SparkSession还提供了DataFrame和Dataset相关的API来编写Spark应用程序。
+  *
+  * 对SparkContext、SQLContext及DataFrame等的一层封装。
  */
 @InterfaceStability.Stable
 class SparkSession private(
@@ -95,6 +100,8 @@ class SparkSession private(
   /**
    * State shared across sessions, including the `SparkContext`, cached data, listener,
    * and a catalog that interacts with external systems.
+    *
+    * 在多个SparkSession之间共享的状态（包括SparkContext、缓存的数据、监听器及与外部系统交互的字典信息）。
    */
   @transient
   private[sql] lazy val sharedState: SharedState = {
@@ -104,6 +111,8 @@ class SparkSession private(
   /**
    * State isolated across sessions, including SQL configurations, temporary tables, registered
    * functions, and everything else that accepts a [[org.apache.spark.sql.internal.SQLConf]].
+    *
+    * 保存SparkSession指定的状态信息。
    */
   @transient
   private[sql] lazy val sessionState: SessionState = {
@@ -115,6 +124,8 @@ class SparkSession private(
   /**
    * A wrapped version of this session in the form of a [[SQLContext]], for backward compatibility.
    *
+    * Spark SQL的上下文信息。
+    *
    * @since 2.0.0
    */
   @transient
@@ -126,6 +137,8 @@ class SparkSession private(
    * This is the interface through which the user can get and set all Spark and Hadoop
    * configurations that are relevant to Spark SQL. When getting the value of a config,
    * this defaults to the value set in the underlying `SparkContext`, if any.
+    *
+    * Spark运行时的配置接口类。
    *
    * @since 2.0.0
    */
@@ -383,6 +396,9 @@ class SparkSession private(
   /**
    * Convert a `BaseRelation` created for external data sources into a `DataFrame`.
    *
+    * 用于将BaseRelation转换为DataFrame
+    * 将BaseRelation转换为DataFrame后，就可以用操作关系数据的方式来开发。
+    *
    * @since 2.0.0
    */
   def baseRelationToDataFrame(baseRelation: BaseRelation): DataFrame = {
@@ -599,6 +615,8 @@ class SparkSession private(
    *   sparkSession.read.parquet("/path/to/file.parquet")
    *   sparkSession.read.schema(schema).json("/path/to/file.json")
    * }}}
+    *
+    * 用于创建DataFrameReader
    *
    * @since 2.0.0
    */
@@ -719,12 +737,16 @@ object SparkSession {
 
   /**
    * Builder for [[SparkSession]].
+    *
+    * SparkSession实例的构建器，对SparkSession实例的构造都依赖于它
    */
   @InterfaceStability.Stable
   class Builder extends Logging {
 
+    // 用于缓存构建SparkConf所需的属性配置
     private[this] val options = new scala.collection.mutable.HashMap[String, String]
 
+    // 用于持有用户提供的SparkContext，可以通过Builder的sparkContext方法来设置
     private[this] var userSuppliedContext: Option[SparkContext] = None
 
     private[spark] def sparkContext(sparkContext: SparkContext): Builder = synchronized {
@@ -743,6 +765,8 @@ object SparkSession {
     /**
      * Sets a config option. Options set using this method are automatically propagated to
      * both `SparkConf` and SparkSession's own configuration.
+      *
+      * 用于向options中添加属性配置
      *
      * @since 2.0.0
      */
@@ -754,6 +778,8 @@ object SparkSession {
     /**
      * Sets a config option. Options set using this method are automatically propagated to
      * both `SparkConf` and SparkSession's own configuration.
+      *
+      * 用于向options中添加属性配置
      *
      * @since 2.0.0
      */
@@ -765,6 +791,8 @@ object SparkSession {
     /**
      * Sets a config option. Options set using this method are automatically propagated to
      * both `SparkConf` and SparkSession's own configuration.
+      *
+      * 用于向options中添加属性配置
      *
      * @since 2.0.0
      */
@@ -776,6 +804,8 @@ object SparkSession {
     /**
      * Sets a config option. Options set using this method are automatically propagated to
      * both `SparkConf` and SparkSession's own configuration.
+      *
+      * 用于向options中添加属性配置
      *
      * @since 2.0.0
      */
@@ -786,6 +816,8 @@ object SparkSession {
 
     /**
      * Sets a list of config options based on the given `SparkConf`.
+      *
+      * 用于向options中添加属性配置
      *
      * @since 2.0.0
      */
@@ -830,58 +862,83 @@ object SparkSession {
      *
      * In case an existing SparkSession is returned, the config options specified in
      * this builder will be applied to the existing SparkSession.
+      *
+      * 用于获取或创建SparkSession
      *
      * @since 2.0.0
      */
     def getOrCreate(): SparkSession = synchronized {
       // Get the session from current thread's active session.
+      // 尝试从ThreadLocal中能获取到激活的SparkSession
       var session = activeThreadSession.get()
-      if ((session ne null) && !session.sparkContext.isStopped) {
+      if ((session ne null) && !session.sparkContext.isStopped) { // 能够获取到且SparkSession还未停止
+        // 将options中的键值对设置到SparkSession的sessionState的SQLConf中
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
         if (options.nonEmpty) {
           logWarning("Using an existing SparkSession; some configuration may not take effect.")
         }
+        // 返回SparkSession对象
         return session
       }
 
       // Global synchronization so we will only set the default session once.
       SparkSession.synchronized {
         // If the current thread does not have an active session, get it from the global session.
+        // 尝试获取默认的SparkSession
         session = defaultSession.get()
-        if ((session ne null) && !session.sparkContext.isStopped) {
+        if ((session ne null) && !session.sparkContext.isStopped) { // 能够获取到且SparkSession还未停止
+          // 将options中的键值对设置到SparkSession的sessionState的SQLConf中
           options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
           if (options.nonEmpty) {
             logWarning("Using an existing SparkSession; some configuration may not take effect.")
           }
+          // 返回SparkSession对象
           return session
         }
 
         // No active nor global default session. Create a new one.
-        val sparkContext = userSuppliedContext.getOrElse {
+        // 如果用户提供了SparkContext，则使用userSuppliedContext中持有的SparkContext
+        val sparkContext = userSuppliedContext.getOrElse { // 否则进行创建
           // set app name if not given
+          // 生成UUID随机字符串
           val randomAppName = java.util.UUID.randomUUID().toString
+          // 构造SparkConf
           val sparkConf = new SparkConf()
+          // 将options中的键值对保存到SparkConf中
           options.foreach { case (k, v) => sparkConf.set(k, v) }
+
+          // 如果Application未指定spark.app.name，则以randomAppName作为Application的名称
           if (!sparkConf.contains("spark.app.name")) {
             sparkConf.setAppName(randomAppName)
           }
+
+          // 创建SparkContext
           val sc = SparkContext.getOrCreate(sparkConf)
           // maybe this is an existing SparkContext, update its SparkConf which maybe used
           // by SparkSession
+          // 将options中的键值对保存到SparkContext的SparkConf中
           options.foreach { case (k, v) => sc.conf.set(k, v) }
+          // 如果SparkContext的SparkConf未设置spark.app.name，则以randomAppName作为Application的名称
           if (!sc.conf.contains("spark.app.name")) {
             sc.conf.setAppName(randomAppName)
           }
           sc
         }
+
+        // 创建SparkSession
         session = new SparkSession(sparkContext)
+        // 将options中的键值对设置到SparkSession的sessionState的SQLConf中
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
+
+        // 将创建SparkSession保存打牌defaultSession中
         defaultSession.set(session)
 
         // Register a successfully instantiated context to the singleton. This should be at the
         // end of the class definition so that the singleton is updated only if there is no
         // exception in the construction of the instance.
+        // 向LiveListenerBus中添加SparkListener监听器
         sparkContext.addSparkListener(new SparkListener {
+          // 在Application结束后清空defaultSession和sqlListener
           override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = {
             defaultSession.set(null)
             sqlListener.set(null)
@@ -889,12 +946,15 @@ object SparkSession {
         })
       }
 
+      // 返回创建的SparkSession
       return session
     }
   }
 
   /**
    * Creates a [[SparkSession.Builder]] for constructing a [[SparkSession]].
+    *
+    * 用于创建Builder。构建器模式
    *
    * @since 2.0.0
    */
@@ -943,17 +1003,23 @@ object SparkSession {
 
   private[sql] def getDefaultSession: Option[SparkSession] = Option(defaultSession.get)
 
-  /** A global SQL listener used for the SQL UI. */
+  /** A global SQL listener used for the SQL UI.
+    * 用于持有SQLListener。sqlListener主要用于SQL UI。
+    **/
   private[sql] val sqlListener = new AtomicReference[SQLListener]()
 
   ////////////////////////////////////////////////////////////////////////////////////////
   // Private methods from now on
   ////////////////////////////////////////////////////////////////////////////////////////
 
-  /** The active SparkSession for the current thread. */
+  /** The active SparkSession for the current thread.
+    * 用于持有当前线程的激活的SparkSession。
+    **/
   private val activeThreadSession = new InheritableThreadLocal[SparkSession]
 
-  /** Reference to the root SparkSession. */
+  /** Reference to the root SparkSession.
+    * 用于持有默认的SparkSession。
+    **/
   private val defaultSession = new AtomicReference[SparkSession]
 
   private val HIVE_SESSION_STATE_CLASS_NAME = "org.apache.spark.sql.hive.HiveSessionState"
