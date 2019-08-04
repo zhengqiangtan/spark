@@ -88,7 +88,7 @@ private[netty] class NettyRpcEnv(
    */
   @volatile private var fileDownloadFactory: TransportClientFactory = _
 
-  // 用于处理请求超时的调度器
+  // 用于处理请求超时的调度器，即单线程的ScheduledThreadPoolExecutor线程池
   val timeoutScheduler = ThreadUtils.newDaemonSingleThreadScheduledExecutor("netty-rpc-env-timeout")
 
   // Because TransportClientFactory.createClient is blocking, we need to run it in this thread pool
@@ -632,6 +632,7 @@ private[netty] class NettyRpcHandler(
     streamManager: StreamManager) extends RpcHandler with Logging {
 
   // A variable to track the remote RpcEnv addresses of all clients
+  // 用于跟踪远程客户端的RpcEnv地址的字典
   private val remoteAddresses = new ConcurrentHashMap[RpcAddress, RpcAddress]()
 
   /**

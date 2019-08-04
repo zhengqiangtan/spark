@@ -33,6 +33,7 @@ import org.apache.spark.util.RpcUtils
  */
 private[spark] object RpcEnv {
 
+  // 创建RpcEnv实例，调用了重载方法
   def create(
       name: String,
       host: String,
@@ -43,6 +44,7 @@ private[spark] object RpcEnv {
     create(name, host, host, port, conf, securityManager, clientMode)
   }
 
+  // 创建RpcEnv实例
   def create(
       name: String,
       bindAddress: String,
@@ -71,33 +73,46 @@ private[spark] object RpcEnv {
  */
 private[spark] abstract class RpcEnv(conf: SparkConf) {
 
-  // 根据"spark.rpc.lookupTimeout"或"spark.network.timeout"配置构造RpcTimeout对象，默认超时时间为120秒
+  /**
+    * 根据"spark.rpc.lookupTimeout"或"spark.network.timeout"配置构造RpcTimeout对象，默认超时时间为120秒
+    * 用于某些场景下将异步执行转换为同步执行
+    */
   private[spark] val defaultLookupTimeout = RpcUtils.lookupRpcTimeout(conf)
 
   /**
    * Return RpcEndpointRef of the registered [[RpcEndpoint]]. Will be used to implement
    * [[RpcEndpoint.self]]. Return `null` if the corresponding [[RpcEndpointRef]] does not exist.
+    *
+    * 根据RpcEndpoint查找对应的RpcEndpointRef
    */
   private[rpc] def endpointRef(endpoint: RpcEndpoint): RpcEndpointRef
 
   /**
    * Return the address that [[RpcEnv]] is listening to.
+    *
+    * 返回RpcEnv监听的地址
    */
   def address: RpcAddress
 
   /**
    * Register a [[RpcEndpoint]] with a name and return its [[RpcEndpointRef]]. [[RpcEnv]] does not
    * guarantee thread-safety.
+    *
+    * 以特定名称注册一个RpcEndpoint，将返回对应的RpcEndpointRef对象
    */
   def setupEndpoint(name: String, endpoint: RpcEndpoint): RpcEndpointRef
 
   /**
    * Retrieve the [[RpcEndpointRef]] represented by `uri` asynchronously.
+    *
+    * 异步方式，通过URI查找对应的RpcEndpointRef对象
    */
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef]
 
   /**
    * Retrieve the [[RpcEndpointRef]] represented by `uri`. This is a blocking action.
+    *
+    * 同步方式，通过URI查找对应的RpcEndpointRef对象
    */
   def setupEndpointRefByURI(uri: String): RpcEndpointRef = {
     /**
@@ -119,12 +134,16 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
 
   /**
    * Stop [[RpcEndpoint]] specified by `endpoint`.
+    *
+    * 停止制定的RpcEndpoint
    */
   def stop(endpoint: RpcEndpointRef): Unit
 
   /**
    * Shutdown this [[RpcEnv]] asynchronously. If need to make sure [[RpcEnv]] exits successfully,
    * call [[awaitTermination()]] straight after [[shutdown()]].
+    *
+    * 关闭当前RpcEnv
    */
   def shutdown(): Unit
 
@@ -132,18 +151,24 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
    * Wait until [[RpcEnv]] exits.
    *
    * TODO do we need a timeout parameter?
+    *
+    * 等待知道RpcEnv退出
    */
   def awaitTermination(): Unit
 
   /**
    * [[RpcEndpointRef]] cannot be deserialized without [[RpcEnv]]. So when deserializing any object
    * that contains [[RpcEndpointRef]]s, the deserialization codes should be wrapped by this method.
+    *
+    * 反序列化操作
    */
   def deserialize[T](deserializationAction: () => T): T
 
   /**
    * Return the instance of the file server used to serve files. This may be `null` if the
    * RpcEnv is not operating in server mode.
+    *
+    * 获取文件服务器
    */
   def fileServer: RpcEnvFileServer
 
@@ -151,6 +176,8 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
    * Open a channel to download a file from the given URI. If the URIs returned by the
    * RpcEnvFileServer use the "spark" scheme, this method will be called by the Utils class to
    * retrieve the files.
+    *
+    * 打开一个Channel用于从给定URI下载文件
    *
    * @param uri URI with location of the file.
    */

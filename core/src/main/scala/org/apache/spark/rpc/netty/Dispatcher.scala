@@ -292,6 +292,8 @@ private[netty] class Dispatcher(nettyEnv: NettyRpcEnv) extends Logging {
     }
   }
 
-  /** A poison endpoint that indicates MessageLoop should exit its message loop. */
+  /** A poison endpoint that indicates MessageLoop should exit its message loop.
+    * 毒药消息
+    **/
   private val PoisonPill = new EndpointData(null, null, null)
 }
