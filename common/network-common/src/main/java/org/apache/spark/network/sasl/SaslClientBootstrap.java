@@ -69,26 +69,35 @@ public class SaslClientBootstrap implements TransportClientBootstrap {
   public void doBootstrap(TransportClient client, Channel channel) {
     SparkSaslClient saslClient = new SparkSaslClient(appId, secretKeyHolder, encrypt);
     try {
+      // 构造装载Token的载荷
       byte[] payload = saslClient.firstToken();
 
-      while (!saslClient.isComplete()) {
+      while (!saslClient.isComplete()) { // 认证还未完成
+        // 构造SaslMessage消息
         SaslMessage msg = new SaslMessage(appId, payload);
+        // 将SaslMessage写入到ByteBuf
         ByteBuf buf = Unpooled.buffer(msg.encodedLength() + (int) msg.body().size());
         msg.encode(buf);
         buf.writeBytes(msg.body().nioByteBuffer());
 
+        // 使用TransportClient以同步方式发送RpcRequest
         ByteBuffer response = client.sendRpcSync(buf.nioBuffer(), conf.saslRTTimeoutMs());
+        // 解析响应数据
         payload = saslClient.response(JavaUtils.bufferToArray(response));
       }
 
+      // 走到这里，说明SASL认证完成了，将appId设置到TransportClient中
       client.setClientId(appId);
 
-      if (encrypt) {
+      if (encrypt) { // 如果开启了传输加密
         if (!SparkSaslServer.QOP_AUTH_CONF.equals(saslClient.getNegotiatedProperty(Sasl.QOP))) {
           throw new RuntimeException(
             new SaslException("Encryption requests by negotiated non-encrypted connection."));
         }
+
+        // 为Channel的处理器链头部添加EncryptionHandler加密处理器、DecryptionHandler解密处理器和TransportFrameDecoder帧解码器
         SaslEncryption.addToChannel(channel, saslClient, conf.maxSaslEncryptedBlockSize());
+        // 将SaslClient置空
         saslClient = null;
         logger.debug("Channel {} configured for SASL encryption.", client);
       }
@@ -98,6 +107,7 @@ public class SaslClientBootstrap implements TransportClientBootstrap {
       if (saslClient != null) {
         try {
           // Once authentication is complete, the server will trust all remaining communication.
+          // 认证完成后，服务端会对剩余所有的请求授信
           saslClient.dispose();
         } catch (RuntimeException e) {
           logger.error("Error while disposing SASL client", e);

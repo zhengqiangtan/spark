@@ -49,14 +49,18 @@ import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
  * timeout if the client is continuously sending but getting no responses, for simplicity.
  *
  * 代理由TransportRequestHandler处理的请求和由TransportResponseHandler处理的响应，并加入传输层的处理。
+ * 继承了SimpleChannelInboundHandler，说明是入站处理器
  */
 public class TransportChannelHandler extends SimpleChannelInboundHandler<Message> {
   private static final Logger logger = LoggerFactory.getLogger(TransportChannelHandler.class);
 
   private final TransportClient client;
+  // 代理的响应处理器和请求处理器
   private final TransportResponseHandler responseHandler;
   private final TransportRequestHandler requestHandler;
+  // 超时时间（纳秒）
   private final long requestTimeoutNs;
+  // 是否关闭空闲连接
   private final boolean closeIdleConnections;
 
   public TransportChannelHandler(
@@ -87,12 +91,18 @@ public class TransportChannelHandler extends SimpleChannelInboundHandler<Message
 
   @Override
   public void channelActive(ChannelHandlerContext ctx) throws Exception {
+    logger.trace(">>> remoteAddress " + ctx.channel().remoteAddress().toString());
+    logger.trace(">>> localAddress " + ctx.channel().localAddress().toString());
+    // 当Channel激活时，会调用TransportRequestHandler的channelActive()方法进行传递
     try {
+      // 该方法会调用TransportRequestHandler内部RpcHandler的channelActive()方法
       requestHandler.channelActive();
     } catch (RuntimeException e) {
       logger.error("Exception from request handler while registering channel", e);
     }
+    // 当Channel激活时，会调用TransportResponseHandler的channelActive()方法进行传递
     try {
+      // 该方法是空实现
       responseHandler.channelActive();
     } catch (RuntimeException e) {
       logger.error("Exception from response handler while registering channel", e);

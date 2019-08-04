@@ -79,8 +79,11 @@ import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
 public class TransportClient implements Closeable {
   private static final Logger logger = LoggerFactory.getLogger(TransportClient.class);
 
+  // 进行通信的Channel通道对象
   private final Channel channel;
+  // 响应处理器
   private final TransportResponseHandler handler;
+  // 客户端ID
   @Nullable private String clientId;
   private volatile boolean timedOut;
 
@@ -88,6 +91,8 @@ public class TransportClient implements Closeable {
     this.channel = Preconditions.checkNotNull(channel);
     this.handler = Preconditions.checkNotNull(handler);
     this.timedOut = false;
+    logger.trace(">>> init TransportClient: {}", this.hashCode());
+    logger.trace(">>> init TransportResponseHandler: {}", handler);
   }
 
   public Channel getChannel() {
@@ -142,6 +147,7 @@ public class TransportClient implements Closeable {
       long streamId, // 流ID
       final int chunkIndex, // 块索引
       final ChunkReceivedCallback callback) { // 响应回调处理器
+    // 开始时间
     final long startTime = System.currentTimeMillis();
     if (logger.isDebugEnabled()) {
       logger.debug("Sending fetch chunk request {} to {}", chunkIndex, getRemoteAddress(channel));
@@ -149,7 +155,7 @@ public class TransportClient implements Closeable {
 
     // 根据流ID和chunckIndex创建StreamChunkId对象
     final StreamChunkId streamChunkId = new StreamChunkId(streamId, chunkIndex);
-    // 添加streamChunkId和ChunkReceivedCallback的引用关系
+    // 向TransportResponseHandler的outstandingFetches字典添加streamChunkId和ChunkReceivedCallback的引用关系
     handler.addFetchRequest(streamChunkId, callback);
 
     // 发送ChunkFetchRequest请求
@@ -190,6 +196,7 @@ public class TransportClient implements Closeable {
    * @param callback Object to call with the stream data.
    */
   public void stream(final String streamId, final StreamCallback callback) {
+    // 开始方法
     final long startTime = System.currentTimeMillis();
     if (logger.isDebugEnabled()) {
       logger.debug("Sending stream request for {} to {}", streamId, getRemoteAddress(channel));
@@ -199,12 +206,14 @@ public class TransportClient implements Closeable {
     // written to the socket atomically, so that callbacks are called in the right order
     // when responses arrive.
     synchronized (this) {
+      // 向TransportResponseHandler的streamCallbacks队列中存放回调对象
       handler.addStreamCallback(callback);
+      // 发送请求并添加监听器
       channel.writeAndFlush(new StreamRequest(streamId)).addListener(
         new ChannelFutureListener() {
           @Override
           public void operationComplete(ChannelFuture future) throws Exception {
-            if (future.isSuccess()) {
+            if (future.isSuccess()) { // 请求发送成功
               long timeTaken = System.currentTimeMillis() - startTime;
               if (logger.isTraceEnabled()) {
                 logger.trace("Sending request for {} to {} took {} ms", streamId,
@@ -216,6 +225,7 @@ public class TransportClient implements Closeable {
               logger.error(errorMsg, future.cause());
               channel.close();
               try {
+                // 发送请求出错，执行对应的回调方法
                 callback.onFailure(streamId, new IOException(errorMsg, future.cause()));
               } catch (Exception e) {
                 logger.error("Uncaught exception in RPC response callback handler!", e);
@@ -238,6 +248,7 @@ public class TransportClient implements Closeable {
    */
   public long sendRpc(ByteBuffer message, // 消息
                       final RpcResponseCallback callback) { // 响应回调处理器
+    // 记录开始时间
     final long startTime = System.currentTimeMillis();
     if (logger.isTraceEnabled()) {
       logger.trace("Sending RPC to {}", getRemoteAddress(channel));
@@ -245,8 +256,16 @@ public class TransportClient implements Closeable {
 
     // 使用UUID生产请求主键
     final long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
-    // 添加requestId和RpcResponseCallback的引用关系
+    /**
+     * 注意这里的操作，向TransportResponseHandler添加requestId和RpcResponseCallback的引用关系。
+     * 该TransportResponseHandler是在向Bootstrap的处理器链中添加TransportChannelHandler时添加的，
+     * 这一步操作会将requestId和回调进行关联，在客户端收到服务端的响应消息时，响应消息中是携带了相同的requestId的，
+     * 此时就可以通过requestId从TransportResponseHandler中获取当时发送请求时设置的回调，
+     * 达到通过响应结果处理回调的效果。
+     */
     handler.addRpcRequest(requestId, callback);
+
+    logger.trace(">>> send() RpcRequest: {} with TransportClient {}", requestId , this.hashCode());
 
     // 发送RPC请求
     channel.writeAndFlush(new RpcRequest(requestId, new NioManagedBuffer(message))).addListener(
@@ -270,6 +289,7 @@ public class TransportClient implements Closeable {
             // 关闭Channel
             channel.close();
             try {
+              // 会调用回调的onFailure()方法以告知失败情况
               callback.onFailure(new IOException(errorMsg, future.cause()));
             } catch (Exception e) {
               logger.error("Uncaught exception in RPC response callback handler!", e);
@@ -278,6 +298,7 @@ public class TransportClient implements Closeable {
         }
       });
 
+    // 返回Request ID
     return requestId;
   }
 
@@ -288,8 +309,10 @@ public class TransportClient implements Closeable {
    * 向服务器发送同步的RPC请求，并根据指定的超时时间等待响应
    */
   public ByteBuffer sendRpcSync(ByteBuffer message, long timeoutMs) {
+    // 构造用于获取结果的Future对象
     final SettableFuture<ByteBuffer> result = SettableFuture.create();
 
+    // 调用sendRpc()方法进行发送，通过SettableFuture对象获取响应
     sendRpc(message, new RpcResponseCallback() {
       @Override
       public void onSuccess(ByteBuffer response) {
@@ -297,16 +320,19 @@ public class TransportClient implements Closeable {
         copy.put(response);
         // flip "copy" to make it readable
         copy.flip();
+        // 将响应结果设置到SettableFuture对象中
         result.set(copy);
       }
 
       @Override
       public void onFailure(Throwable e) {
+        // 将异常设置到SettableFuture对象中
         result.setException(e);
       }
     });
 
     try {
+      // 通过SettableFuture对象获取结果，该方法会阻塞，以达到同步效果
       return result.get(timeoutMs, TimeUnit.MILLISECONDS);
     } catch (ExecutionException e) {
       throw Throwables.propagate(e.getCause());
@@ -324,6 +350,7 @@ public class TransportClient implements Closeable {
    * @param message The message to send.
    */
   public void send(ByteBuffer message) {
+    logger.trace(">>> send() OneWayMessage with TransportClient {}", this.hashCode());
     channel.writeAndFlush(new OneWayMessage(new NioManagedBuffer(message)));
   }
 

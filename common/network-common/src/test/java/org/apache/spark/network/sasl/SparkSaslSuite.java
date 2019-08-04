@@ -436,15 +436,19 @@ public class SparkSaslSuite {
   private static class EncryptionCheckerBootstrap extends ChannelOutboundHandlerAdapter
     implements TransportServerBootstrap {
 
+    // 标记
     boolean foundEncryptionHandler;
 
+    // 数据写操作
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
       throws Exception {
-      if (!foundEncryptionHandler) {
+      if (!foundEncryptionHandler) { // 在没有找到EncryptionHandler时
+        // 根据是否存在名为saslEncryption的处理器给foundEncryptionHandler赋值
         foundEncryptionHandler =
           ctx.channel().pipeline().get(SaslEncryption.ENCRYPTION_HANDLER_NAME) != null;
       }
+      // 写操作
       ctx.write(msg, promise);
     }
 

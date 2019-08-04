@@ -114,6 +114,7 @@ public class TransportClientFactory implements Closeable {
   public TransportClientFactory(
       TransportContext context,
       List<TransportClientBootstrap> clientBootstraps) {
+    // 赋值初始化各个字段
     this.context = Preconditions.checkNotNull(context);
     this.conf = context.getConf();
     this.clientBootstraps = Lists.newArrayList(Preconditions.checkNotNull(clientBootstraps));
@@ -123,9 +124,12 @@ public class TransportClientFactory implements Closeable {
 
     // IO模式，即从TransportConf获取key为“spark.模块名.io.mode”的属性值。默认值为NIO，Spark还支持EPOLL
     IOMode ioMode = IOMode.valueOf(conf.ioMode());
+    // 根据IOMode创建SocketChannel，NIO模式为NioSocketChannel，Epoll模式为EpollSocketChannel
     this.socketChannelClass = NettyUtils.getClientChannelClass(ioMode);
     // TODO: Make thread pool name configurable.
+    // 根据IOMode、配置的客户端线程数创建EventLoopGroup
     this.workerGroup = NettyUtils.createEventLoop(ioMode, conf.clientThreads(), "shuffle-client");
+    // 创建ByteBuf池分配器
     this.pooledAllocator = NettyUtils.createPooledByteBufAllocator(
       conf.preferDirectBufs(), false /* allowCache */, conf.clientThreads());
   }
@@ -174,8 +178,8 @@ public class TransportClientFactory implements Closeable {
       // handler. Then check that the client is still alive, in case it timed out before
       // this code was able to update things.
       /**
-       * 更新TransportClient的Channel中配置的TransportChannelHandler的最后一次使用时间
-       * 确保TransportClient没有超时
+       * 更新TransportClient的Channel中配置的TransportChannelHandler内部的TransportResponseHandler
+       * 最后一次使用时间，确保TransportClient没有超时
        */
       TransportChannelHandler handler = cachedClient.getChannel().pipeline()
         .get(TransportChannelHandler.class);
@@ -238,12 +242,16 @@ public class TransportClientFactory implements Closeable {
     return createClient(address);
   }
 
-  /** Create a completely new {@link TransportClient} to the remote address. */
+  /** Create a completely new {@link TransportClient} to the remote address.
+   * 使用TransportClientFactory创建TransportClient对象，
+   * 内部会创建Netty的Bootstrap，并连接到指定的远程地址。
+   **/
   private TransportClient createClient(InetSocketAddress address) throws IOException {
     logger.debug("Creating new connection to {}", address);
 
     // 构建根引导程序Bootstrap应对其进行配置
     Bootstrap bootstrap = new Bootstrap();
+    // 设置线程组
     bootstrap.group(workerGroup)
       .channel(socketChannelClass)
       // Disable Nagle's Algorithm since we don't want packets to wait
@@ -261,7 +269,12 @@ public class TransportClientFactory implements Closeable {
       // 该回调方法会在bootstrap连接到远程服务器时被调用
       @Override
       public void initChannel(SocketChannel ch) {
-        // 根据Channel初始化TransportContext的Pipeline
+        /**
+         * 根据Channel初始化TransportContext的Pipeline
+         * 在该过程中会创建TransportChannelHandler对象，
+         * 而创建TransportChannelHandler会关联TransportResponseHandler和TransportRequestHandler及TransportClient三个对象。
+         * 这里会获取其中的TransportClient，该TransportClient关联了Channel对象。
+         */
         TransportChannelHandler clientHandler = context.initializePipeline(ch);
         // 记录TransportClient和Channel
         clientRef.set(clientHandler.getClient());
@@ -273,6 +286,7 @@ public class TransportClientFactory implements Closeable {
     long preConnect = System.nanoTime();
     // 使用根引导程序连接远程服务器
     ChannelFuture cf = bootstrap.connect(address);
+
     if (!cf.awaitUninterruptibly(conf.connectionTimeoutMs())) {
       throw new IOException(
         String.format("Connecting to %s timed out (%s ms)", address, conf.connectionTimeoutMs()));
@@ -280,13 +294,17 @@ public class TransportClientFactory implements Closeable {
       throw new IOException(String.format("Failed to connect to %s", address), cf.cause());
     }
 
+    // 获取TransportClient和Channel
     TransportClient client = clientRef.get();
     Channel channel = channelRef.get();
+
     assert client != null : "Channel future completed successfully with null client";
 
     // Execute any client bootstraps synchronously before marking the Client as successful.
     long preBootstrap = System.nanoTime();
     logger.debug("Connection to {} successful, running bootstraps...", address);
+
+    // 遍历clientBootstraps，执行每个引导程序的doBootstrap()方法
     try {
       for (TransportClientBootstrap clientBootstrap : clientBootstraps) {
         // 给TransportClient设置客户端引导程序

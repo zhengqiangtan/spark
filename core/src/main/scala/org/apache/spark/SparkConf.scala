@@ -51,13 +51,17 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
 
   import SparkConf._
 
-  /** Create a SparkConf that loads defaults from system properties and the classpath */
+  /** Create a SparkConf that loads defaults from system properties and the classpath
+    * 默认无参的构造方法，会传入loadDefaults为true
+    **/
   def this() = this(true)
 
   // 用于存放配置的Map
   private val settings = new ConcurrentHashMap[String, String]()
 
+  // 配置读取器，使用懒加载方法初始化
   @transient private lazy val reader: ConfigReader = {
+    // SparkConfigProvider对settings字典进行了包装
     val _reader = new ConfigReader(new SparkConfigProvider(settings))
     _reader.bindEnv(new ConfigProvider {
       override def get(key: String): Option[String] = Option(getenv(key))
@@ -465,6 +469,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
       logWarning(msg)
     }
 
+    // 大量配置项名称
     val executorOptsKey = "spark.executor.extraJavaOptions"
     val executorClasspathKey = "spark.executor.extraClassPath"
     val driverOptsKey = "spark.driver.extraJavaOptions"
@@ -520,6 +525,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     }
 
     // Warn against deprecated memory fractions (unless legacy memory management mode is enabled)
+    // 检查内存相关的配置
     val legacyMemoryManagementKey = "spark.memory.useLegacyMode"
     val legacyMemoryManagement = getBoolean(legacyMemoryManagementKey, false)
     if (!legacyMemoryManagement) {
@@ -535,6 +541,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     }
 
     // Check for legacy configs
+    // 检查Spark运行时JVM参数
     sys.env.get("SPARK_JAVA_OPTS").foreach { value =>
       val warning =
         s"""
@@ -559,6 +566,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
       }
     }
 
+    // 检查Spark Classpath
     sys.env.get("SPARK_CLASSPATH").foreach { value =>
       val warning =
         s"""
@@ -581,6 +589,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
       }
     }
 
+    // 检查Executor相关参数
     if (!contains(sparkExecutorInstances)) {
       sys.env.get("SPARK_WORKER_INSTANCES").foreach { value =>
         val warning =
@@ -599,6 +608,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
       }
     }
 
+    // 检查部署模式相关的参数
     if (contains("spark.master") && get("spark.master").startsWith("yarn-")) {
       val warning = s"spark.master ${get("spark.master")} is deprecated in Spark 2.0+, please " +
         "instead use \"yarn\" with specified deploy mode."
@@ -642,6 +652,8 @@ private[spark] object SparkConf extends Logging {
    *
    * The extra information is logged as a warning when the config is present in the user's
    * configuration.
+    *
+    * 废弃的配置项
    */
   private val deprecatedConfigs: Map[String, DeprecatedConfig] = {
     val configs = Seq(
@@ -667,6 +679,8 @@ private[spark] object SparkConf extends Logging {
    *
    * The alternates are used in the order defined in this map. If deprecated configs are
    * present in the user's configuration, a warning is logged.
+    *
+    * 在不同版本中发生变化的配置项
    */
   private val configsWithAlternatives = Map[String, Seq[AlternateConfig]](
     "spark.executor.userClassPathFirst" -> Seq(

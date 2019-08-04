@@ -39,14 +39,20 @@ public final class MessageDecoder extends MessageToMessageDecoder<ByteBuf> {
 
   @Override
   public void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+    // 从ByteBuf中获取消息类型
     Message.Type msgType = Message.Type.decode(in);
+    // 使用重载的decode()方法进行解码
     Message decoded = decode(msgType, in);
+    // 检查解码后的消息类型是否正确
     assert decoded.type() == msgType;
     logger.trace("Received message {}: {}", msgType, decoded);
+    // 将解码后的消息添加到out中
     out.add(decoded);
   }
 
   private Message decode(Message.Type msgType, ByteBuf in) {
+    // 根据消息类型，选择不同类型的消息类，使用它们的静态方法decode(...)进行解码
+    logger.trace(">>> Decode Message.Type " + msgType.name());
     switch (msgType) {
       case ChunkFetchRequest:
         return ChunkFetchRequest.decode(in);

@@ -24,6 +24,7 @@ import com.google.common.base.Throwables;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import org.apache.spark.network.protocol.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,18 +32,7 @@ import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NioManagedBuffer;
 import org.apache.spark.network.client.RpcResponseCallback;
 import org.apache.spark.network.client.TransportClient;
-import org.apache.spark.network.protocol.ChunkFetchRequest;
-import org.apache.spark.network.protocol.ChunkFetchFailure;
-import org.apache.spark.network.protocol.ChunkFetchSuccess;
-import org.apache.spark.network.protocol.Encodable;
-import org.apache.spark.network.protocol.OneWayMessage;
-import org.apache.spark.network.protocol.RequestMessage;
-import org.apache.spark.network.protocol.RpcFailure;
-import org.apache.spark.network.protocol.RpcRequest;
-import org.apache.spark.network.protocol.RpcResponse;
-import org.apache.spark.network.protocol.StreamFailure;
-import org.apache.spark.network.protocol.StreamRequest;
-import org.apache.spark.network.protocol.StreamResponse;
+
 import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
 
 /**
@@ -63,10 +53,14 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
   /** Client on the same channel allowing us to talk back to the requester. */
   private final TransportClient reverseClient;
 
-  /** Handles all RPC messages. */
+  /** Handles all RPC messages.
+   * 用于处理RPC消息
+   **/
   private final RpcHandler rpcHandler;
 
-  /** Returns each chunk part of a stream. */
+  /** Returns each chunk part of a stream.
+   * 用于处理流请求消息
+   **/
   private final StreamManager streamManager;
 
   public TransportRequestHandler(
@@ -105,6 +99,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
   // 根据请求类型处理各类请求
   @Override
   public void handle(RequestMessage request) {
+    logger.trace(">>> handle() " + request.type());
     if (request instanceof ChunkFetchRequest) {
       // 处理块获取请求
       processFetchRequest((ChunkFetchRequest) request);
@@ -219,6 +214,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
   private void respond(final Encodable result) {
     // 获取远程地址用于打印日志
     final SocketAddress remoteAddress = channel.remoteAddress();
+    logger.trace(">>> respond to: {}, message type: {}", remoteAddress, ((Message)result).type());
     // 写出数据
     channel.writeAndFlush(result).addListener(
       new ChannelFutureListener() {

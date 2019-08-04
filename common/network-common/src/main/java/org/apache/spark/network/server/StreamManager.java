@@ -41,8 +41,12 @@ public abstract class StreamManager {
    *
    * The returned ManagedBuffer will be release()'d after being written to the network.
    *
+   * 用于从Stream ID指定的流中获取索引从0至chunkIndex的块数据，返回的是ManagedBuffer对象
+   *
    * @param streamId id of a stream that has been previously registered with the StreamManager.
+   *                 Stream ID用于从StreamManager中获取对应的流
    * @param chunkIndex 0-indexed chunk of the stream that's requested
+   *                   索引从0至chunkIndex为该方法需要拉取的块
    */
   public abstract ManagedBuffer getChunk(long streamId, int chunkIndex);
 
@@ -52,6 +56,8 @@ public abstract class StreamManager {
    *
    * Note the <code>streamId</code> argument is not related to the similarly named argument in the
    * {@link #getChunk(long, int)} method.
+   *
+   * 打开Stream ID对应的流，返回的是ManagedBuffer对象
    *
    * @param streamId id of a stream that has been previously registered with the StreamManager.
    * @return A managed buffer for the stream, or null if the stream was not found.
@@ -67,17 +73,23 @@ public abstract class StreamManager {
    *
    * This must be called before the first getChunk() on the stream, but it may be invoked multiple
    * times with the same channel and stream id.
+   *
+   * 将指定的Channel与流绑定
    */
   public void registerChannel(Channel channel, long streamId) { }
 
   /**
    * Indicates that the given channel has been terminated. After this occurs, we are guaranteed not
    * to read from the associated streams again, so any state can be cleaned up.
+   *
+   * 关闭Channel。该操作执行后Channel绑定的流将不会被读取，Channel与流的绑定也会被清除
    */
   public void connectionTerminated(Channel channel) { }
 
   /**
    * Verify that the client is authorized to read from the given stream.
+   *
+   * 检查认证的方法，验证对应的客户端是否有权限从指定的流读取数据
    *
    * @throws SecurityException If client is not authorized.
    */

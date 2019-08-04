@@ -48,12 +48,19 @@ import org.apache.spark.network.util.TransportConf;
 public class TransportServer implements Closeable {
   private static final Logger logger = LoggerFactory.getLogger(TransportServer.class);
 
+  // TransportContext上下文
   private final TransportContext context;
+  // TransportConf配置
   private final TransportConf conf;
+  // 发送消息的处理器
   private final RpcHandler appRpcHandler;
+  // 服务端传输引导器列表，该列表的引导器会在服务端Channel初始化时执行特定方法
   private final List<TransportServerBootstrap> bootstraps;
 
+  // Netty的ServerBootstrap
   private ServerBootstrap bootstrap;
+
+  // Netty的ChannelFuture
   private ChannelFuture channelFuture;
   private int port = -1;
 
@@ -96,6 +103,7 @@ public class TransportServer implements Closeable {
     return port;
   }
 
+  // 初始化TransportServer，其内部会初始化ServerBootstrap
   private void init(String hostToBind, int portToBind) {
     // IO模式，默认为NIO，即spark.模块.io.mode
     IOMode ioMode = IOMode.valueOf(conf.ioMode());
@@ -129,12 +137,15 @@ public class TransportServer implements Closeable {
 
     // 为根引导程序设置管道初始化回调函数
     bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
+      // 当服务端的Channel初始化时该方法会被调用
       @Override
       protected void initChannel(SocketChannel ch) throws Exception {
         RpcHandler rpcHandler = appRpcHandler;
+        // 遍历所有的TransportServerBootstrap，调用其doBootstraps()方法
         for (TransportServerBootstrap bootstrap : bootstraps) {
           rpcHandler = bootstrap.doBootstrap(ch, rpcHandler);
         }
+        // 使用TransportContext的initializePipeline()方法为服务端的ChannelPipeline添加处理器
         context.initializePipeline(ch, rpcHandler);
       }
     });
@@ -145,6 +156,7 @@ public class TransportServer implements Closeable {
     channelFuture = bootstrap.bind(address);
     channelFuture.syncUninterruptibly();
 
+    // 记录绑定端口
     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
     logger.debug("Shuffle server started on port: {}", port);
   }

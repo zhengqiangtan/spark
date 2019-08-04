@@ -56,8 +56,7 @@ public abstract class RpcHandler {
   /**
    * Returns the StreamManager which contains the state about which streams are currently being
    * fetched by a TransportClient.
-   * 获取StreamManager，StreamManager可以从流中获取单个的块，
-   * 因此它也包含着当前正在被TransportClient获取的流的状态。
+   * 获取StreamManager，主要是用于跟踪当前正在被TransportClient拉取的流的状态。
    */
   public abstract StreamManager getStreamManager();
 
@@ -91,15 +90,18 @@ public abstract class RpcHandler {
   // 当Channel产生异常时调用
   public void exceptionCaught(Throwable cause, TransportClient client) { }
 
+  // 定义的无需回复的消息的回调
   private static class OneWayRpcCallback implements RpcResponseCallback {
 
     private static final Logger logger = LoggerFactory.getLogger(OneWayRpcCallback.class);
 
+    // 仅仅记录日志
     @Override
     public void onSuccess(ByteBuffer response) {
       logger.warn("Response provided for one-way RPC.");
     }
 
+    // 仅仅记录日志
     @Override
     public void onFailure(Throwable e) {
       logger.error("Error response provided for one-way RPC.", e);

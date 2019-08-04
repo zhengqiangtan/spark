@@ -37,7 +37,7 @@ public interface Message extends Encodable {
 
   /**
    * Whether to include the body of the message in the same frame as the message.
-   * 用于判断消息的主题是否包含在消息的同一帧中
+   * 用于判断消息的主体是否包含在消息的同一帧中
    **/
   boolean isBodyInFrame();
 

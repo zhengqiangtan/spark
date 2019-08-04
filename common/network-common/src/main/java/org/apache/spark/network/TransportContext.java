@@ -61,11 +61,16 @@ import org.apache.spark.network.util.TransportFrameDecoder;
 public class TransportContext {
   private static final Logger logger = LoggerFactory.getLogger(TransportContext.class);
 
+  // 传输上下文的配置信息
   private final TransportConf conf;
+  // 发送消息的处理器
   private final RpcHandler rpcHandler;
+  // 标记是否关闭空闲连接
   private final boolean closeIdleConnections;
 
+  // 消息编码器
   private final MessageEncoder encoder;
+  // 消息解码器
   private final MessageDecoder decoder;
 
   public TransportContext(TransportConf conf, RpcHandler rpcHandler) {
@@ -176,10 +181,18 @@ public class TransportContext {
    * 并在客户端代理TransportResponseHandler对响应消息进行处理。
    */
   private TransportChannelHandler createChannelHandler(Channel channel, RpcHandler rpcHandler) {
+    // 创建处理传输响应的处理器
     TransportResponseHandler responseHandler = new TransportResponseHandler(channel);
+    // 创建TransportClient
     TransportClient client = new TransportClient(channel, responseHandler);
-    TransportRequestHandler requestHandler = new TransportRequestHandler(channel, client,
-      rpcHandler);
+    // 创建处理传输请求的处理器
+    TransportRequestHandler requestHandler = new TransportRequestHandler(channel, client, rpcHandler);
+
+    logger.trace(" >>> TransportResponseHandler: {}", responseHandler);
+    logger.trace(" >>> TransportRequestHandler: {}", requestHandler);
+    logger.trace(" >>> TransportClient: {}", client.hashCode());
+
+    // 将TransportClient、TransportResponseHandler和TransportRequestHandler绑定在一个TransportChannelHandler上
     return new TransportChannelHandler(client, responseHandler, requestHandler,
       conf.connectionTimeoutMs(), closeIdleConnections);
   }

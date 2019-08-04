@@ -62,23 +62,36 @@ class StreamInterceptor implements TransportFrameDecoder.Interceptor {
 
   @Override
   public boolean handle(ByteBuf buf) throws Exception {
+    // 本次要读取的数据字节数
     int toRead = (int) Math.min(buf.readableBytes(), byteCount - bytesRead);
+    // 构造buf的分片并转换为NIO的ByteBuffer，该操作会从readerIndex开始，创建长度为toRead的分片
     ByteBuffer nioBuffer = buf.readSlice(toRead).nioBuffer();
 
+    // 获取可读字节数
     int available = nioBuffer.remaining();
+    // 将数据传给StreamCallback回调对象
     callback.onData(streamId, nioBuffer);
+    // 累计已读字节数
     bytesRead += available;
-    if (bytesRead > byteCount) {
+
+    // 判断读了多少
+    if (bytesRead > byteCount) { // 已读字节大于响应消息指定的总字节数
+      // 构造异常
       RuntimeException re = new IllegalStateException(String.format(
         "Read too many bytes? Expected %d, but read %d.", byteCount, bytesRead));
+      // 将异常交给StreamCallback回调对象
       callback.onFailure(streamId, re);
+      // 关闭流
       handler.deactivateStream();
       throw re;
-    } else if (bytesRead == byteCount) {
+    } else if (bytesRead == byteCount) { // 已读字节等于响应消息指定的总字节数
+      // 即已经读完了，关闭流
       handler.deactivateStream();
+      // 调用StreamCallback回调对象的方法告知读完了
       callback.onComplete(streamId);
     }
 
+    // 返回值表示是否读完
     return bytesRead != byteCount;
   }
 

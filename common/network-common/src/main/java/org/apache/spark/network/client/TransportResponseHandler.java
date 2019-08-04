@@ -52,13 +52,18 @@ import org.apache.spark.network.util.TransportFrameDecoder;
 public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
   private static final Logger logger = LoggerFactory.getLogger(TransportResponseHandler.class);
 
+  // Channel对象
   private final Channel channel;
 
+  // 存放ChunkFetchRequest请求对应的回调
   private final Map<StreamChunkId, ChunkReceivedCallback> outstandingFetches;
 
+  // 存放RpcRequest请求对应的回调
   private final Map<Long, RpcResponseCallback> outstandingRpcs;
 
+  // 存放StreamRequest请求对应的回调
   private final Queue<StreamCallback> streamCallbacks;
+  // 标识流是否是激活状态
   private volatile boolean streamActive;
 
   /** Records the time (in system nanoseconds) that the last fetch or RPC request was sent. */
@@ -72,6 +77,7 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
     this.timeOfLastRequestNs = new AtomicLong(0);
   }
 
+  // 添加ChunkFetchRequest请求对应回调
   public void addFetchRequest(StreamChunkId streamChunkId, ChunkReceivedCallback callback) {
     // 将更新最后一次请求的时间为当前系统时间
     updateTimeOfLastRequest();
@@ -79,10 +85,12 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
     outstandingFetches.put(streamChunkId, callback);
   }
 
+  // 移除ChunkFetchRequest请求对应回调
   public void removeFetchRequest(StreamChunkId streamChunkId) {
     outstandingFetches.remove(streamChunkId);
   }
 
+  // 添加RpcRequest请求对应回调
   public void addRpcRequest(long requestId, RpcResponseCallback callback) {
     // 更新最后一次请求的时间为当前系统时间
     updateTimeOfLastRequest();
@@ -90,15 +98,18 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
     outstandingRpcs.put(requestId, callback);
   }
 
+  // 移除RpcRequest请求对应回调
   public void removeRpcRequest(long requestId) {
     outstandingRpcs.remove(requestId);
   }
 
+  // 添加StreamRequest请求对应回调
   public void addStreamCallback(StreamCallback callback) {
     timeOfLastRequestNs.set(System.nanoTime());
     streamCallbacks.offer(callback);
   }
 
+  // 标识streamActive为非激活状态
   @VisibleForTesting
   public void deactivateStream() {
     streamActive = false;
@@ -147,6 +158,7 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
 
   @Override
   public void handle(ResponseMessage message) throws Exception {
+    logger.trace(">>> handle() " + message.type());
     if (message instanceof ChunkFetchSuccess) { // 块获取请求成功的响应
       // 转换消息类型
       ChunkFetchSuccess resp = (ChunkFetchSuccess) message;

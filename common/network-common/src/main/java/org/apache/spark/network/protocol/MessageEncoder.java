@@ -45,17 +45,24 @@ public final class MessageEncoder extends MessageToMessageEncoder<Message> {
    */
   @Override
   public void encode(ChannelHandlerContext ctx, Message in, List<Object> out) throws Exception {
+    // 用于存放消息体
     Object body = null;
+    // 用于记录消息体长度
     long bodyLength = 0;
+    // 用于记录消息体是否包含在消息的同一帧中
     boolean isBodyInFrame = false;
 
     // If the message has a body, take it out to enable zero-copy transfer for the payload.
-    if (in.body() != null) {
+    if (in.body() != null) { // 在消息体不为null时
       try {
+        // 读消息体大小
         bodyLength = in.body().size();
+        // 读消息体，返回值为io.netty.buffer.ByteBuf和io.netty.channel.FileRegion其中一种。
         body = in.body().convertToNetty();
+        // 读消息体是否包含在消息的同一帧中的标记
         isBodyInFrame = in.isBodyInFrame();
-      } catch (Exception e) {
+      } catch (Exception e) { // 遇见异常
+        // 释放消息体
         in.body().release();
         if (in instanceof AbstractResponseMessage) {
           AbstractResponseMessage resp = (AbstractResponseMessage) in;
@@ -71,23 +78,42 @@ public final class MessageEncoder extends MessageToMessageEncoder<Message> {
       }
     }
 
+    // 读取消息类型
     Message.Type msgType = in.type();
+    logger.trace(">>> Encode Message.Type " + msgType.name());
     // All messages have the frame length, message type, and message itself. The frame length
     // may optionally include the length of the body data, depending on what message is being
     // sent.
+    /**
+     * 计算消息头长度：表示帧大小的8字节 + 消息类型编码后的长度 + 消息编码后的长度
+     */
     int headerLength = 8 + msgType.encodedLength() + in.encodedLength();
+    // 计算帧大小
     long frameLength = headerLength + (isBodyInFrame ? bodyLength : 0);
+    // 存放消息头的ByteBuf
     ByteBuf header = ctx.alloc().heapBuffer(headerLength);
+    // 写入帧大小
     header.writeLong(frameLength);
+    // 写入消息类型
     msgType.encode(header);
+    /**
+     * 写入消息体相关信息，这个方法在每种消息的实现是不一样的。例如：
+     * OneWayMessage只写入了消息体大小，
+     * RpcRequest消息写入了Request ID和消息体大小，
+     * StreamRequest消息写入了Stream ID。
+     */
     in.encode(header);
+
+    // 检查消息头是否合法
     assert header.writableBytes() == 0;
 
     if (body != null) {
       // We transfer ownership of the reference on in.body() to MessageWithHeader.
       // This reference will be freed when MessageWithHeader.deallocate() is called.
+      // 消息体不为空，构建一个MessageWithHeader对象，保存了消息体、消息头、消息体大小、消息头大小
       out.add(new MessageWithHeader(in.body(), header, body, bodyLength));
     } else {
+      // 消息体为空，只保存消息头
       out.add(header);
     }
   }
