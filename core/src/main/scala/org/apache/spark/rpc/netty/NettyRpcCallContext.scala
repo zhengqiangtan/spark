@@ -26,12 +26,15 @@ import org.apache.spark.rpc.{RpcAddress, RpcCallContext}
 private[netty] abstract class NettyRpcCallContext(override val senderAddress: RpcAddress)
   extends RpcCallContext with Logging {
 
+  // 用于发送。
   protected def send(message: Any): Unit
 
+  // 用于向发送者回复信息。
   override def reply(response: Any): Unit = {
     send(response)
   }
 
+  // 用于向发送者发送失败信息。
   override def sendFailure(e: Throwable): Unit = {
     send(RpcFailure(e))
   }
@@ -60,8 +63,11 @@ private[netty] class RemoteNettyRpcCallContext(
     senderAddress: RpcAddress)
   extends NettyRpcCallContext(senderAddress) {
 
+  // 向客户端发送消息
   override protected def send(message: Any): Unit = {
+    // 序列化消息
     val reply = nettyEnv.serialize(message)
+    // 使用回调的onSuccess()方法进行发送
     callback.onSuccess(reply)
   }
 }

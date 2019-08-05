@@ -146,7 +146,7 @@ private[netty] class NettyRpcEnv(
     if (server != null) RpcAddress(host, server.getPort()) else null
   }
 
-  // 设置RpcEndpoint
+  // 为NettyRpcEnv设置RpcEndpoint
   override def setupEndpoint(name: String, endpoint: RpcEndpoint): RpcEndpointRef = {
     // 使用Dispatcher注册RpcEndpoint
     dispatcher.registerRpcEndpoint(name, endpoint)
@@ -192,12 +192,16 @@ private[netty] class NettyRpcEnv(
           // 新建一个Outbox并添加到outboxes字典中
           val newOutbox = new Outbox(this, receiver.address)
           val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
-          if (oldOutbox == null) {
+
+          if (oldOutbox == null) { // 返回为空，说明添加成功
+            // 将添加的Outbox返回
             newOutbox
           } else {
+            // 否则说明有其他线程抢先添加了，返回已经添加的Outbox
             oldOutbox
           }
         } else {
+          // 已存在，直接返回
           outbox
         }
       }
@@ -268,7 +272,7 @@ private[netty] class NettyRpcEnv(
         // 接收者地址与当前NettyRpcEnv的地址相同，说明处理请求的RpcEndpoint位于本地的NettyRpcEnv中
         // 构造Promise对象
         val p = Promise[Any]()
-        p.future.onComplete {
+        p.future.onComplete { // 在消息被处理完成后会被调用
           case Success(response) => onSuccess(response)
           case Failure(e) => onFailure(e)
         }(ThreadUtils.sameThread)
@@ -333,55 +337,80 @@ private[netty] class NettyRpcEnv(
   }
 
   private def cleanup(): Unit = {
+    // CAS方式修改标识
     if (!stopped.compareAndSet(false, true)) {
       return
     }
 
+    // 关闭OutBox
     val iter = outboxes.values().iterator()
     while (iter.hasNext()) {
       val outbox = iter.next()
       outboxes.remove(outbox.address)
       outbox.stop()
     }
+
+    // 关闭超时调度器
     if (timeoutScheduler != null) {
       timeoutScheduler.shutdownNow()
     }
+
+    // 关闭Dispatcher
     if (dispatcher != null) {
       dispatcher.stop()
     }
+
+    // 关闭TransportServer
     if (server != null) {
       server.close()
     }
+
+    // 关闭TransportClientFactory
     if (clientFactory != null) {
       clientFactory.close()
     }
+
+    // 关闭创建TransportClient的线程池
     if (clientConnectionExecutor != null) {
       clientConnectionExecutor.shutdownNow()
     }
+
+    // 关闭创建文件下载器的工厂
     if (fileDownloadFactory != null) {
       fileDownloadFactory.close()
     }
   }
 
+  // 反序列化操作
   override def deserialize[T](deserializationAction: () => T): T = {
     NettyRpcEnv.currentEnv.withValue(this) {
       deserializationAction()
     }
   }
 
+  // 文件服务器
   override def fileServer: RpcEnvFileServer = streamManager
 
+  // 根据URI打开一个ReadableByteChannel用于下载文件
   override def openChannel(uri: String): ReadableByteChannel = {
+    // 解析URI为URI对象
     val parsedUri = new URI(uri)
+
+    // 检查URI是否合法
     require(parsedUri.getHost() != null, "Host name must be defined.")
     require(parsedUri.getPort() > 0, "Port must be defined.")
     require(parsedUri.getPath() != null && parsedUri.getPath().nonEmpty, "Path must be defined.")
 
+    // 创建单向管道，数据会从pipe的sink写入，然后可以从source读取
     val pipe = Pipe.open()
+    // 将pipe的source包装为FileDownloadChannel
     val source = new FileDownloadChannel(pipe.source())
     try {
+      // 创建TransportClient客户端
       val client = downloadClient(parsedUri.getHost(), parsedUri.getPort())
+      // 创建下载回调，此回调会把读到的数据写入到pipe的sink中
       val callback = new FileDownloadCallback(pipe.sink(), source, client)
+      // 使用TransportClient的stream()方法发送流请求进行文件下载，响应的数据将交给callback处理
       client.stream(parsedUri.getPath(), callback)
     } catch {
       case e: Exception =>
@@ -389,11 +418,12 @@ private[netty] class NettyRpcEnv(
         source.close()
         throw e
     }
-
+    // 返回FileDownloadChannel类型的source，它的读取方法会从pipe的source读取数据
     source
   }
 
   private def downloadClient(host: String, port: Int): TransportClient = {
+    // 检查创建文件下载客户端的工厂是否为空
     if (fileDownloadFactory == null) synchronized {
       if (fileDownloadFactory == null) {
         val module = "files"
@@ -417,10 +447,11 @@ private[netty] class NettyRpcEnv(
         val downloadConf = SparkTransportConf.fromSparkConf(clone, module, ioThreads)
         // 创建TransportContext
         val downloadContext = new TransportContext(downloadConf, new NoOpRpcHandler(), true)
-        // 创建用于文件下载的TransportClientFactory
+        // 创建用于文件下载客户端的TransportClientFactory
         fileDownloadFactory = downloadContext.createClientFactory(createClientBootstraps())
       }
     }
+    // 创建TransportClient
     fileDownloadFactory.createClient(host, port)
   }
 
@@ -428,14 +459,20 @@ private[netty] class NettyRpcEnv(
 
     @volatile private var error: Throwable = _
 
+    // 出现错误
     def setError(e: Throwable): Unit = {
       error = e
+      // 关闭Source
       source.close()
     }
 
+    // 读取数据
     override def read(dst: ByteBuffer): Int = {
+      // 从source中读取数据放入传入的dst中
       Try(source.read(dst)) match {
+          // 读取成功，返回读取字节数
         case Success(bytesRead) => bytesRead
+          // 读取出错，抛出异常
         case Failure(readErr) =>
           if (error != null) {
             throw error
@@ -445,8 +482,10 @@ private[netty] class NettyRpcEnv(
       }
     }
 
+    // 关闭source
     override def close(): Unit = source.close()
 
+    // 判断source是否打开
     override def isOpen(): Boolean = source.isOpen()
 
   }
@@ -456,19 +495,26 @@ private[netty] class NettyRpcEnv(
       source: FileDownloadChannel,
       client: TransportClient) extends StreamCallback {
 
+    // 接收到数据
     override def onData(streamId: String, buf: ByteBuffer): Unit = {
+      // 将buf中的数据全部写入到WritableByteChannel中
       while (buf.remaining() > 0) {
         sink.write(buf)
       }
     }
 
+    // 数据读写完毕
     override def onComplete(streamId: String): Unit = {
+      // 关闭WritableByteChannel
       sink.close()
     }
 
+    // 数据读写出错
     override def onFailure(streamId: String, cause: Throwable): Unit = {
       logDebug(s"Error downloading stream $streamId.", cause)
+      // 设置错误到FileDownloadChannel
       source.setError(cause)
+      // 关闭WritableByteChannel
       sink.close()
     }
 
@@ -519,7 +565,11 @@ private[rpc] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
         (nettyEnv, nettyEnv.address.port)
       }
       try {
-        // 在指定端口启动NettyRpcEnv
+        /**
+          * 在指定端口启动NettyRpcEnv，
+          * 该操作中会从config.port指定端口开始尝试创建并启动TransportServer，默认为7077
+          * 如果启动失败说明端口可能被占了，就自增端口号重试启动，默认重试16次
+          */
         Utils.startServiceOnPort(config.port, startNettyRpcEnv, sparkConf, config.name)._1
       } catch {
         case NonFatal(e) =>
@@ -566,6 +616,7 @@ private[netty] class NettyRpcEndpointRef(
   // 远端RpcEndpoint的名称。
   private val _name = endpointAddress.name
 
+  // 获取RpcEndpoint的地址
   override def address: RpcAddress = if (_address != null) _address.rpcAddress else null
 
   private def readObject(in: ObjectInputStream): Unit = {
@@ -605,6 +656,10 @@ private[netty] class NettyRpcEndpointRef(
 
 /**
  * The message that is sent from the sender to the receiver.
+  *
+  * @param senderAddress 发送消息的客户端的RpcEnv地址
+  * @param receiver 消息接收者的RpcEndpointRef
+  * @param content 消息内容
  */
 private[netty] case class RequestMessage(
     senderAddress: RpcAddress, receiver: NettyRpcEndpointRef, content: Any)
@@ -649,6 +704,7 @@ private[netty] class NettyRpcHandler(
       callback: RpcResponseCallback): Unit = {
     // 转换消息数据为RequestMessage对象
     val messageToDispatch = internalReceive(client, message)
+    logTrace(s">>> receive receiver.name: ${messageToDispatch.receiver.name}")
     // 将消息投递到Dispatcher中对应的Inbox中
     dispatcher.postRemoteMessage(messageToDispatch, callback)
   }
@@ -658,30 +714,31 @@ private[netty] class NettyRpcHandler(
       client: TransportClient,
       message: ByteBuffer): Unit = {
     val messageToDispatch = internalReceive(client, message)
+    logTrace(s">>> receive receiver.name: ${messageToDispatch.receiver.name}")
     dispatcher.postOneWayMessage(messageToDispatch)
   }
 
-  // 转换消息数据为RequestMessage对象
+  // 反序列化消息数据为RequestMessage对象
   private def internalReceive(client: TransportClient, message: ByteBuffer): RequestMessage = {
-    // 获取发送消息的TransportClient的InetSocketAddress，并构造为远端Client地址对象RpcAddress
+    // 获取发送消息的TransportClient的InetSocketAddress，并构造为客户端地址对象RpcAddress
     val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
     assert(addr != null)
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
     // 反序列化消息为RequestMessage对象
     val requestMessage = nettyEnv.deserialize[RequestMessage](client, message)
-    // 检查远端Server地址是否为空
+    // 检查客户端RpcEnv地址是否为空
     if (requestMessage.senderAddress == null) {
       // Create a new message with the socket address of the client as the sender.
-      // 远端Server地址为空，重新构造一个RequestMessage对象，远端Server地址是TransportClient的Socket地址
+      // 客户端RpcEnv地址为空，重新构造一个RequestMessage对象，客户端RpcEnv地址就是客户端的地址
       RequestMessage(clientAddr, requestMessage.receiver, requestMessage.content)
-    } else { // 远端Server地址不为空
+    } else { // 客户端RpcEnv地址不为空
       // The remote RpcEnv listens to some port, we should also fire a RemoteProcessConnected for
       // the listening address
       val remoteEnvAddress = requestMessage.senderAddress
       /**
-        * 将远端节点的地址信息存入remoteAddresses字典
-        *   - 键为保存远端节点Client的host和port的RpcAddress实例
-        *   - 值为保存远端节点server的host和port的RpcAddress实例
+        * 将客户端RpcEnv地址存入remoteAddresses字典
+        *   - 键为保存客户端节点的host和port的RpcAddress实例
+        *   - 值为保存客户端节点的RpcEnv地址的host和port的RpcAddress实例
         */
       if (remoteAddresses.putIfAbsent(clientAddr, remoteEnvAddress) == null) {
         // put后返回为null即表示成功，说明这是首次与该地址通信，则向Dispatcher投递RemoteProcessConnected事件

@@ -165,6 +165,10 @@ public class TransportContext {
         // NOTE: Chunks are currently guaranteed to be returned in the order of request, but this
         // would require more logic to guarantee if this were not part of the same event loop.
         .addLast("handler", channelHandler); // InboundHandler
+
+      logger.trace(">>> TransportServer Channel localAddress: {}", channel.localAddress());
+      logger.trace(">>> TransportServer Channel remoteAddress: {}", channel.remoteAddress());
+
       return channelHandler;
     } catch (RuntimeException e) {
       logger.error("Error while initializing Netty pipeline", e);

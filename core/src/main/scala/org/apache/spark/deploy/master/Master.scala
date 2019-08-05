@@ -45,11 +45,11 @@ import org.apache.spark.util.{ThreadUtils, Utils}
   * Master负责对整个集群中所有资源的统一管理和分配，它接收各个Worker的注册、更新状态、心跳等消息，
   * 也接收Driver和Application的注册。
   *
-  * @param rpcEnv
+  * @param rpcEnv Master会向该RpcEnv注册自己
   * @param address RpcEnv的地址
   * @param webUiPort WebUI的端口
-  * @param securityMgr
-  * @param conf
+  * @param securityMgr 安全管理器
+  * @param conf SparkConf
   */
 private[deploy] class Master(
     override val rpcEnv: RpcEnv,

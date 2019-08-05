@@ -179,7 +179,7 @@ private[netty] class Dispatcher(nettyEnv: NettyRpcEnv) extends Logging {
     **/
   def postOneWayMessage(message: RequestMessage): Unit = {
     // 使用postMessage()方法发送
-    postMessage(message.receiver.name, OneWayMessage(message.senderAddress, message.content),
+     postMessage(message.receiver.name, OneWayMessage(message.senderAddress, message.content),
       (e) => throw e)
   }
 
@@ -196,6 +196,8 @@ private[netty] class Dispatcher(nettyEnv: NettyRpcEnv) extends Logging {
       endpointName: String,
       message: InboxMessage,
       callbackIfStopped: (Exception) => Unit): Unit = {
+    logTrace(s">>> postMessage endpointName: ${endpointName}")
+    logTrace(s">>> postMessage message: ${message}")
     val error = synchronized { // 加锁
       // 获取对应的EndpointData
       val data = endpoints.get(endpointName)

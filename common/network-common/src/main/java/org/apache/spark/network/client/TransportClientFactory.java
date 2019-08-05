@@ -298,6 +298,9 @@ public class TransportClientFactory implements Closeable {
     TransportClient client = clientRef.get();
     Channel channel = channelRef.get();
 
+    logger.trace(">>> TransportClient Channel localAddress: {}", channel.localAddress());
+    logger.trace(">>> TransportClient Channel remoteAddress: {}", channel.remoteAddress());
+
     assert client != null : "Channel future completed successfully with null client";
 
     // Execute any client bootstraps synchronously before marking the Client as successful.

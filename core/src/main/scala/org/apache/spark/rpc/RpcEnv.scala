@@ -135,7 +135,7 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
   /**
    * Stop [[RpcEndpoint]] specified by `endpoint`.
     *
-    * 停止制定的RpcEndpoint
+    * 停止指定的RpcEndpoint
    */
   def stop(endpoint: RpcEndpointRef): Unit
 
