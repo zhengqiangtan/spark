@@ -55,34 +55,50 @@ private[spark] class ReplayListenerBus extends SparkListenerBus with Logging {
       sourceName: String,
       maybeTruncated: Boolean = false,
       eventsFilter: ReplayEventsFilter = SELECT_ALL_FILTER): Unit = {
+    // 从logData指定的输入流中读取事件数据，并转换为迭代器，迭代元素都是字符串
     val lines = Source.fromInputStream(logData).getLines()
+    // 使用replay()方法进行事件重播
     replay(lines, sourceName, maybeTruncated, eventsFilter)
   }
 
   /**
    * Overloaded variant of [[replay()]] which accepts an iterator of lines instead of an
    * [[InputStream]]. Exposed for use by custom ApplicationHistoryProvider implementations.
-   */
+   *
+    * @param lines 事件集合
+    * @param sourceName  事件源名称
+    * @param maybeTruncated
+    * @param eventsFilter 事件过滤器，即(String) => Boolean函数
+    */
   def replay(
       lines: Iterator[String],
       sourceName: String,
       maybeTruncated: Boolean,
       eventsFilter: ReplayEventsFilter): Unit = {
+    // 记录当前行
     var currentLine: String = null
+    // 记录行号
     var lineNumber: Int = 0
 
     try {
+      // 预处理
       val lineEntries = lines
+        // 对lines迭代器进行Zip操作，为每行都添加序号
         .zipWithIndex
+        // 使用指定的事件过滤器进行过滤
         .filter { case (line, _) => eventsFilter(line) }
 
+      // 遍历预处理后的事件迭代器
       while (lineEntries.hasNext) {
         try {
+          // 获取下一个事件
           val entry = lineEntries.next()
 
+          // 记录当前事件并自增行号
           currentLine = entry._1
           lineNumber = entry._2 + 1
 
+          // 投递事件
           postToAll(JsonProtocol.sparkEventFromJson(parse(currentLine)))
         } catch {
           case e: ClassNotFoundException if KNOWN_REMOVED_CLASSES.contains(e.getMessage) =>
@@ -99,6 +115,11 @@ private[spark] class ReplayListenerBus extends SparkListenerBus with Logging {
             // We can only ignore exception from last line of the file that might be truncated
             // the last entry may not be the very last line in the event log, but we treat it
             // as such in a best effort to replay the given input
+            /**
+              * 在解析JSON数据时出现解析错误，可能是因为文件被截断所导致的，
+              * 此时需要根据maybeTruncated参数来决定是否抛出异常；
+              * 如果允许截断文件存在，且没有更多的元素，则不抛出异常
+              */
             if (!maybeTruncated || lineEntries.hasNext) {
               throw jpe
             } else {

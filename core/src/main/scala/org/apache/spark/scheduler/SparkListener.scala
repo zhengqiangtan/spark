@@ -38,20 +38,25 @@ trait SparkListenerEvent {
   protected[spark] def logEvent: Boolean = true
 }
 
+// Stage被提交
 @DeveloperApi
 case class SparkListenerStageSubmitted(stageInfo: StageInfo, properties: Properties = null)
   extends SparkListenerEvent
 
+// Stage完成
 @DeveloperApi
 case class SparkListenerStageCompleted(stageInfo: StageInfo) extends SparkListenerEvent
 
+// Task开始执行
 @DeveloperApi
 case class SparkListenerTaskStart(stageId: Int, stageAttemptId: Int, taskInfo: TaskInfo)
   extends SparkListenerEvent
 
+// Task开始获取结果
 @DeveloperApi
 case class SparkListenerTaskGettingResult(taskInfo: TaskInfo) extends SparkListenerEvent
 
+// Task结束执行
 @DeveloperApi
 case class SparkListenerTaskEnd(
     stageId: Int,
@@ -63,6 +68,7 @@ case class SparkListenerTaskEnd(
     @Nullable taskMetrics: TaskMetrics)
   extends SparkListenerEvent
 
+// Job开始执行
 @DeveloperApi
 case class SparkListenerJobStart(
     jobId: Int,
@@ -75,6 +81,7 @@ case class SparkListenerJobStart(
   val stageIds: Seq[Int] = stageInfos.map(_.stageId)
 }
 
+// Job结束执行
 @DeveloperApi
 case class SparkListenerJobEnd(
     jobId: Int,
@@ -82,34 +89,44 @@ case class SparkListenerJobEnd(
     jobResult: JobResult)
   extends SparkListenerEvent
 
+// SparkEnv环境被更新
 @DeveloperApi
 case class SparkListenerEnvironmentUpdate(environmentDetails: Map[String, Seq[(String, String)]])
   extends SparkListenerEvent
 
+// BlockManager被添加
 @DeveloperApi
 case class SparkListenerBlockManagerAdded(time: Long, blockManagerId: BlockManagerId, maxMem: Long)
   extends SparkListenerEvent
 
+// BlockManager被移除
 @DeveloperApi
 case class SparkListenerBlockManagerRemoved(time: Long, blockManagerId: BlockManagerId)
   extends SparkListenerEvent
 
+// RDD被移除持久化
 @DeveloperApi
 case class SparkListenerUnpersistRDD(rddId: Int) extends SparkListenerEvent
 
+// Executor被添加
 @DeveloperApi
 case class SparkListenerExecutorAdded(time: Long, executorId: String, executorInfo: ExecutorInfo)
   extends SparkListenerEvent
 
+// Executor被移除
 @DeveloperApi
 case class SparkListenerExecutorRemoved(time: Long, executorId: String, reason: String)
   extends SparkListenerEvent
 
+// Block被更新
 @DeveloperApi
 case class SparkListenerBlockUpdated(blockUpdatedInfo: BlockUpdatedInfo) extends SparkListenerEvent
 
 /**
  * Periodic updates from executors.
+  *
+  * Executor度量被更新
+  *
  * @param execId executor id
  * @param accumUpdates sequence of (taskId, stageId, stageAttemptId, accumUpdates)
  */
@@ -119,6 +136,7 @@ case class SparkListenerExecutorMetricsUpdate(
     accumUpdates: Seq[(Long, Int, Int, Seq[AccumulableInfo])])
   extends SparkListenerEvent
 
+// Application开始执行
 @DeveloperApi
 case class SparkListenerApplicationStart(
     appName: String,
@@ -128,12 +146,15 @@ case class SparkListenerApplicationStart(
     appAttemptId: Option[String],
     driverLogs: Option[Map[String, String]] = None) extends SparkListenerEvent
 
+// Application结束执行
 @DeveloperApi
 case class SparkListenerApplicationEnd(time: Long) extends SparkListenerEvent
 
 /**
  * An internal class that describes the metadata of an event log.
  * This event is not meant to be posted to listeners downstream.
+  *
+  * 用于事件日志元数据，会被忽略投递
  */
 private[spark] case class SparkListenerLogStart(sparkVersion: String) extends SparkListenerEvent
 

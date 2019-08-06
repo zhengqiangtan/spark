@@ -42,6 +42,7 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
 
   // Cap the capacity of the event queue so we get an explicit error (rather than
   // an OOM exception) if it's perpetually being added to more quickly than it's being drained.
+  // 事件队列容量，通过spark.scheduler.listenerbus.eventqueue.size参数指定，默认为1000
   private lazy val EVENT_QUEUE_CAPACITY = validateAndGetQueueSize()
 
   /**
@@ -51,7 +52,9 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
     */
   private lazy val eventQueue = new LinkedBlockingQueue[SparkListenerEvent](EVENT_QUEUE_CAPACITY)
 
+  // 从配置信息获取队列容量值，会设置给EVENT_QUEUE_CAPACITY字段
   private def validateAndGetQueueSize(): Int = {
+    // 通过spark.scheduler.listenerbus.eventqueue.size获取队列容量，默认为1000
     val queueSize = sparkContext.conf.get(LISTENER_BUS_EVENT_QUEUE_SIZE)
     if (queueSize <= 0) {
       throw new SparkException("spark.scheduler.listenerbus.eventqueue.size must be > 0!")
@@ -91,19 +94,25 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
   // 用于当有新的事件到来时释放信号量，当对事件进行处理时获取信号量。
   private val eventLock = new Semaphore(0)
 
-  // 处理时间的线程
+  // 处理事件的线程
   private val listenerThread = new Thread(name) {
+    // 设置为守护线程
     setDaemon(true)
+
+    // 主要的运行方法
     override def run(): Unit = Utils.tryOrStopSparkContext(sparkContext) {
       LiveListenerBus.withinListenerThread.withValue(true) {
+
+        // 无限循环
         while (true) {
           // 获取信号量
           eventLock.acquire()
           self.synchronized {
+            // 标记正在处理事件
             processingEvent = true
           }
           try {
-            // 从eventQueue中获取事件
+            // 从eventQueue中获取事件，并判断事件是否为空
             val event = eventQueue.poll
             if (event == null) {
               // Get out of the while loop and shutdown the daemon thread
@@ -113,10 +122,11 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
               }
               return
             }
-            // 事件处理
+            // 对事件进行处理
             postToAll(event)
           } finally {
             self.synchronized {
+              // 标记当前没有事件被处理
               processingEvent = false
             }
           }
@@ -134,7 +144,9 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
    *
    */
   def start(): Unit = {
+    // CAS方式标记开始运行了
     if (started.compareAndSet(false, true)) {
+      // 启动listenerThread线程开始处理事件
       listenerThread.start()
     } else {
       throw new IllegalStateException(s"$name already started!")
@@ -143,6 +155,7 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
 
   // 向eventQueue队列放入事件
   def post(event: SparkListenerEvent): Unit = {
+    // 判断事件总线运行状态
     if (stopped.get) {
       // Drop further events to make `listenerThread` exit ASAP
       logError(s"$name has already stopped! Dropping event $event")
@@ -152,7 +165,8 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
     val eventAdded = eventQueue.offer(event)
     if (eventAdded) { // 放入成功，释放信号量
       eventLock.release()
-    } else { // 放入失败，丢弃事件
+    } else { // 放入失败，可能是因为事件队列满了
+      // 丢弃事件
       onDropEvent(event)
       // 递增丢弃事件的计数器
       droppedEventsCounter.incrementAndGet()
@@ -186,17 +200,28 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
    * time has elapsed. Throw `TimeoutException` if the specified time elapsed before the queue
    * emptied.
    * Exposed for testing.
+    *
+    * 等待一段时间直到当前事件总线中没有事件了，此处的"没有事件"需满足两个条件：
+    * 1. 事件队列为空；
+    * 2. 没有正在处理的事件。
+    *
+    * 如果直到超时一直无法满足，会抛出超时异常
    */
   @throws(classOf[TimeoutException])
   def waitUntilEmpty(timeoutMillis: Long): Unit = {
+    // 计算应该终止的时间
     val finishTime = System.currentTimeMillis + timeoutMillis
+    // 如果事件队列不为空，或者还有正在处理的事件，就循环判断
     while (!queueIsEmpty) {
+      // 如果当前时间超过了应该终止的时间，就抛出超时异常
       if (System.currentTimeMillis > finishTime) {
         throw new TimeoutException(
           s"The event queue is not empty after $timeoutMillis milliseconds")
       }
       /* Sleep rather than using wait/notify, because this is used only for testing and
-       * wait/notify add overhead in the general case. */
+       * wait/notify add overhead in the general case.
+       * 休眠一段时间
+       **/
       Thread.sleep(10)
     }
   }
@@ -204,6 +229,8 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
   /**
    * For testing only. Return whether the listener daemon thread is still alive.
    * Exposed for testing.
+    *
+    * 判断处理线程是否存活
    */
   def listenerThreadIsAlive: Boolean = listenerThread.isAlive
 
@@ -212,21 +239,34 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
    *
    * The use of synchronized here guarantees that all events that once belonged to this queue
    * have already been processed by all attached listeners, if this returns true.
+    *
+    * 事件队列是否为空，且没有正在处理的事件
    */
   private def queueIsEmpty: Boolean = synchronized { eventQueue.isEmpty && !processingEvent }
 
   /**
    * Stop the listener bus. It will wait until the queued events have been processed, but drop the
    * new events after stopping.
+    *
+    * 停止事件总线
    */
   def stop(): Unit = {
+    // 先检查状态
     if (!started.get()) {
       throw new IllegalStateException(s"Attempted to stop $name that has not yet started!")
     }
+    // CAS方式标记已经停止
     if (stopped.compareAndSet(false, true)) {
       // Call eventLock.release() so that listenerThread will poll `null` from `eventQueue` and know
       // `stop` is called.
+      // 释放信号量
       eventLock.release()
+
+      /**
+        * join处理线程直到它处理完正在处理的事件，
+        * 因为listenerThread在判断stopped标记为true后会直接结束，
+        * 所以往后的事件不会被处理
+        */
       listenerThread.join()
     } else {
       // Keep quiet
@@ -238,6 +278,8 @@ private[spark] class LiveListenerBus(val sparkContext: SparkContext) extends Spa
    * notified with the dropped events.
    *
    * Note: `onDropEvent` can be called in any thread.
+    *
+    * 丢弃事件
    */
   def onDropEvent(event: SparkListenerEvent): Unit = {
     // 这里的执行表示事件是因为队列满了才无法放入导致失败，从而将logDroppedEvent修改为true

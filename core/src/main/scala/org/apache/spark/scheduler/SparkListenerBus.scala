@@ -30,6 +30,7 @@ private[spark] trait SparkListenerBus
   protected override def doPostEvent(
       listener: SparkListenerInterface,
       event: SparkListenerEvent): Unit = {
+    // 对事件进行匹配，分别调用监听器的不同方法进行处理
     event match {
       case stageSubmitted: SparkListenerStageSubmitted =>
         listener.onStageSubmitted(stageSubmitted)

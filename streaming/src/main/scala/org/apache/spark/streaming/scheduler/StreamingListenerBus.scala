@@ -26,7 +26,7 @@ import org.apache.spark.util.ListenerBus
  * registers itself with Spark listener bus, so that it can receive WrappedStreamingListenerEvents,
  * unwrap them as StreamingListenerEvent and dispatch them to StreamingListeners.
   * 用于将StreamingListenerEvent类型的事件投递到Streaming Listener类型的监听器，
-  * 此外还会将StreamingListenerEvent类型的事件交给Spark ListenerBus。
+  * 此外还会将StreamingListenerEvent类型的事件交给SparkListenerBus。
  */
 private[streaming] class StreamingListenerBus(sparkListenerBus: LiveListenerBus)
   extends SparkListener with ListenerBus[StreamingListener, StreamingListenerEvent] {
@@ -36,20 +36,25 @@ private[streaming] class StreamingListenerBus(sparkListenerBus: LiveListenerBus)
    * dispatched to all StreamingListeners in the thread of the Spark listener bus.
    */
   def post(event: StreamingListenerEvent) {
+    // 把事件转发给sparkListenerBus
     sparkListenerBus.post(new WrappedStreamingListenerEvent(event))
   }
 
+  // 当收到SparkListenerEvent事件
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
     event match {
+        // 如果是WrappedStreamingListenerEvent类型的事件，就投递给自己维护的所有监听器
       case WrappedStreamingListenerEvent(e) =>
         postToAll(e)
       case _ =>
     }
   }
 
+  // 用于向指定监听器通知事件
   protected override def doPostEvent(
       listener: StreamingListener,
       event: StreamingListenerEvent): Unit = {
+    // 根据事件类型进行匹配，分别处理
     event match {
       case receiverStarted: StreamingListenerReceiverStarted =>
         listener.onReceiverStarted(receiverStarted)
@@ -90,6 +95,8 @@ private[streaming] class StreamingListenerBus(sparkListenerBus: LiveListenerBus)
   /**
    * Wrapper for StreamingListenerEvent as SparkListenerEvent so that it can be posted to Spark
    * listener bus.
+    *
+    * @param streamingListenerEvent 内部维护的StreamingListenerEvent事件
    */
   private case class WrappedStreamingListenerEvent(streamingListenerEvent: StreamingListenerEvent)
     extends SparkListenerEvent {

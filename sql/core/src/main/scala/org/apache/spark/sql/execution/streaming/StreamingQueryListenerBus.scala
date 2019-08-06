@@ -36,6 +36,9 @@ import org.apache.spark.util.ListenerBus
  * those queries that were started in the associated SparkSession.
   * 用于将StreamingQueryListener.Event类型的事件投递到StreamingQueryListener类型的监听器，
   * 此外还会将StreamingQueryListener.Event类型的事件交给SparkListenerBus。
+  *
+  * StreamingQueryListenerBus自己也是一个SparkListener监听器，
+  * 它会将自己添加到sparkListenerBus中，并且实现了onOtherEvent()方法
  */
 class StreamingQueryListenerBus(sparkListenerBus: LiveListenerBus)
   extends SparkListener with ListenerBus[StreamingQueryListener, StreamingQueryListener.Event] {
@@ -56,6 +59,8 @@ class StreamingQueryListenerBus(sparkListenerBus: LiveListenerBus)
    * `StreamingQueryManager.activeQueries` because a terminated query is cleared from
    * `StreamingQueryManager.activeQueries` as soon as it is stopped, but the this ListenerBus
    * must clear a query only after the termination event of that query has been posted.
+    *
+    * 用于记录需要被sparkListenerBus转发的事件的RunId
    */
   private val activeQueryRunIds = new mutable.HashSet[UUID]
 
@@ -64,15 +69,21 @@ class StreamingQueryListenerBus(sparkListenerBus: LiveListenerBus)
    * Note that only the QueryStarted event is posted to the listener synchronously. Other events
    * are dispatched to Spark listener bus. This method is guaranteed to be called by queries in
    * the same SparkSession as this listener.
+    *
+    * 投递事件的方法
    */
   def post(event: StreamingQueryListener.Event) {
     event match {
-      case s: QueryStartedEvent =>
+      case s: QueryStartedEvent => // 对于QueryStartedEvent单独处理
+        // 记录Query事件的runId
         activeQueryRunIds.synchronized { activeQueryRunIds += s.runId }
+        // 会将投递的事件也投递给sparkListenerBus
         sparkListenerBus.post(s)
         // post to local listeners to trigger callbacks
+        // 然后将事件通知给自己所维护的所有监听器
         postToAll(s)
       case _ =>
+        // 其它事件直接投递给sparkListenerBus
         sparkListenerBus.post(event)
     }
   }
@@ -84,6 +95,11 @@ class StreamingQueryListenerBus(sparkListenerBus: LiveListenerBus)
         // synchronously and the ones attached to LiveListenerBus asynchronously. Therefore,
         // we need to ignore QueryStartedEvent if this method is called within SparkListenerBus
         // thread
+        /**
+          * 当收到投递给sparkListenerBus的StreamingQueryListener.Event时，
+          * 当LiveListenerBus事件总线的处理线程还没有工作，或投递的事件不是QueryStartedEvent，
+          * 就讲事件通知给自己所维护的所有监听器
+          */
         if (!LiveListenerBus.withinListenerThread.value || !e.isInstanceOf[QueryStartedEvent]) {
           postToAll(e)
         }
@@ -98,22 +114,31 @@ class StreamingQueryListenerBus(sparkListenerBus: LiveListenerBus)
   override protected def doPostEvent(
       listener: StreamingQueryListener,
       event: StreamingQueryListener.Event): Unit = {
+
+    // 该方法用于判断activeQueryRunIds是否包含指定的runId
     def shouldReport(runId: UUID): Boolean = {
       activeQueryRunIds.synchronized { activeQueryRunIds.contains(runId) }
     }
 
     event match {
       case queryStarted: QueryStartedEvent =>
+        // 如果activeQueryRunIds中包含该Query事件的runId
         if (shouldReport(queryStarted.runId)) {
+          // 则执行监听器的onQueryStarted()方法
           listener.onQueryStarted(queryStarted)
         }
       case queryProgress: QueryProgressEvent =>
+        // 如果activeQueryRunIds中包含该Query事件的runId
         if (shouldReport(queryProgress.progress.runId)) {
+          // 则执行监听器的onQueryProgress()方法
           listener.onQueryProgress(queryProgress)
         }
       case queryTerminated: QueryTerminatedEvent =>
+        // 如果activeQueryRunIds中包含该Query事件的runId
         if (shouldReport(queryTerminated.runId)) {
+          // 则执行监听器的onQueryTerminated()方法
           listener.onQueryTerminated(queryTerminated)
+          // 因为Query事件终止了，需要将该事件的runId从activeQueryRunIds移除
           activeQueryRunIds.synchronized { activeQueryRunIds -= queryTerminated.runId }
         }
       case _ =>
