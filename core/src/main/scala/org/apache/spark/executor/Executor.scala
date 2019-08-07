@@ -96,6 +96,7 @@ private[spark] class Executor(
   // Executor的度量来源
   private val executorSource = new ExecutorSource(threadPool, executorId)
 
+  // 非Local运行模式才会初始化
   if (!isLocal) {
     env.metricsSystem.registerSource(executorSource)
     env.blockManager.initialize(conf.getAppId)

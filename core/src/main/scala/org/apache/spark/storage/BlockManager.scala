@@ -83,23 +83,29 @@ private[spark] class BlockManager(
     numUsableCores: Int)
   extends BlockDataManager with BlockEvictionHandler with Logging {
 
+  // 是否开启外部Shuffle服务，默认不开启
   private[spark] val externalShuffleServiceEnabled =
     conf.getBoolean("spark.shuffle.service.enabled", false)
 
+  // 创建DiskBlockManager
   val diskBlockManager = {
     // Only perform cleanup if an external service is not serving our shuffle files.
+    // 在没有开启外部Shuffle服务，且是Driver的情况下，需要在停止时清理文件
     val deleteFilesOnStop =
       !externalShuffleServiceEnabled || executorId == SparkContext.DRIVER_IDENTIFIER
+    // 构造DiskBlockManager实例
     new DiskBlockManager(conf, deleteFilesOnStop)
   }
 
   // Visible for testing
   private[storage] val blockInfoManager = new BlockInfoManager
 
+  // 创建用于执行Future的线程池，线程前缀为block-manager-future，线程池大小默认为128
   private val futureExecutionContext = ExecutionContext.fromExecutorService(
     ThreadUtils.newDaemonCachedThreadPool("block-manager-future", 128))
 
   // Actual storage of where blocks are kept
+  // 创建MemoryStore
   private[spark] val memoryStore =
     new MemoryStore(conf, blockInfoManager, serializerManager, memoryManager, this)
   private[spark] val diskStore = new DiskStore(conf, diskBlockManager)
@@ -152,6 +158,7 @@ private[spark] class BlockManager(
   private val maxFailuresBeforeLocationRefresh =
     conf.getInt("spark.block.failures.beforeLocationRefresh", 5)
 
+  // BlockManagerSlaveEndpoint
   private val slaveEndpoint = rpcEnv.setupEndpoint(
     "BlockManagerEndpoint" + BlockManager.ID_GENERATOR.next,
     new BlockManagerSlaveEndpoint(rpcEnv, this, mapOutputTracker))
@@ -177,7 +184,7 @@ private[spark] class BlockManager(
    * BlockManagerMaster, starts the BlockManagerWorker endpoint, and registers with a local shuffle
    * service if configured.
     *
-    * 初始化方法。只有在该方法被调用后才能发挥作用。
+    * 初始化方法。只有在该方法被调用后BlockManager才能发挥作用。
    */
   def initialize(appId: String): Unit = {
     // 初始化BlockTransferService
@@ -198,17 +205,24 @@ private[spark] class BlockManager(
 
     /**
       * 生成当前BlockManager的BlockManagerId。
-      * 此处创建的BlockManagerId实际只是在向BlockManagerMaster注册BlockManager时，给BlockManager-Master提供参考，
+      * 此处创建的BlockManagerId实际只是在向BlockManagerMaster注册BlockManager时，给BlockManagerMaster提供参考，
       * BlockManagerMaster将会创建一个包含了拓扑信息的新BlockManagerId作为正式分配给BlockManager的身份标识。
       */
     val id =
       BlockManagerId(executorId, blockTransferService.hostName, blockTransferService.port, None)
 
+    /**
+      * 向BlockManagerMaster注册当前BlockManager，传递的参数有：
+      * 1. BlockManagerId；
+      * 2. 当前BlockManager管理的最大内存
+      * 3. 当前BlockManager的BlockManagerSlaveEndpoint端点
+      */
     val idFromMaster = master.registerBlockManager(
       id,
       maxMemory,
       slaveEndpoint)
 
+    // 根据注册返回的ID重置blockManagerId
     blockManagerId = if (idFromMaster != null) idFromMaster else id
 
     /**

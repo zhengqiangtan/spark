@@ -153,14 +153,14 @@ private[netty] class NettyRpcEnv(
   }
 
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
-    // 得到RpcEndpointAddress对象
+    // 构建远端RpcEndpoint的NettyRpcEndpointRef
     val addr = RpcEndpointAddress(uri)
     // 构建NettyRpcEndpointRef
     val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
-    // 获取远端NettyRpcEnv的RpcEndpointVerifier
+    // 构造用于发送验证请求的NettyRpcEndpointRef
     val verifier = new NettyRpcEndpointRef(
       conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
-    // 使用ask方法进行询问，向远端NettyRpcEnv的RpcEndpointVerifier发送RpcEndpointVerifier.CheckExistence消息
+    // 使用ask方法进行询问，向远端NettyRpcEnv的NettyRpcEndpointRef发送RpcEndpointVerifier.CheckExistence消息
     verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
       if (find) {
         // 能够查询到

@@ -251,7 +251,7 @@ private[spark] class ApplicationMaster(
       }
 
       if (isClusterMode) {
-        runDriver(securityMgr)
+        推测执行(securityMgr)
       } else {
         runExecutorLauncher(securityMgr)
       }

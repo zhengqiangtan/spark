@@ -53,6 +53,7 @@ object DriverWrapper {
         Thread.currentThread.setContextClassLoader(loader)
 
         // Delegate to supplied main class
+        // 运行的是用户提交的Jar包的主类的main()方法
         val clazz = Utils.classForName(mainClass)
         val mainMethod = clazz.getMethod("main", classOf[Array[String]])
         mainMethod.invoke(null, extraArgs.toArray[String])

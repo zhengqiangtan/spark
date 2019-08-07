@@ -394,9 +394,11 @@ object SparkEnv extends Logging {
       *   - 当前应用程序是Driver，则创建BlockManagerMasterEndpoint，并且注册到Dispatcher中，注册名为BlockManagerMaster。
       *   - 当前应用程序是Executor，则从远端Driver实例的NettyRpcEnv的Dispatcher中查找BlockManagerMasterEndpoint的引用。
       */
-    val blockManagerMaster = new BlockManagerMaster(registerOrLookupEndpoint(
-      BlockManagerMaster.DRIVER_ENDPOINT_NAME,
-      new BlockManagerMasterEndpoint(rpcEnv, isLocal, conf, listenerBus)),
+    val blockManagerMaster = new BlockManagerMaster(
+      // 注册或查找RpcEndpoint
+      registerOrLookupEndpoint(
+        BlockManagerMaster.DRIVER_ENDPOINT_NAME, // BlockManagerMaster
+        new BlockManagerMasterEndpoint(rpcEnv, isLocal, conf, listenerBus)),
       conf, isDriver)
 
     // NB: blockManager is not valid until initialize() is called later.
