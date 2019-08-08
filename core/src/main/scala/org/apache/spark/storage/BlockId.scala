@@ -51,12 +51,15 @@ sealed abstract class BlockId {
 
   override def toString: String = name
   override def hashCode: Int = name.hashCode
+
+  // 判断BlockId是否相等，需要类相同，name也相同
   override def equals(other: Any): Boolean = other match {
     case o: BlockId => getClass == o.getClass && name.equals(o.name)
     case _ => false
   }
 }
 
+// RDDBlock块的Id，name由"rdd_"开头
 @DeveloperApi
 case class RDDBlockId(rddId: Int, splitIndex: Int) extends BlockId {
   override def name: String = "rdd_" + rddId + "_" + splitIndex
@@ -64,53 +67,65 @@ case class RDDBlockId(rddId: Int, splitIndex: Int) extends BlockId {
 
 // Format of the shuffle block ids (including data and index) should be kept in sync with
 // org.apache.spark.network.shuffle.ExternalShuffleBlockResolver#getBlockData().
+// ShuffleBlockId块，name由"shuffle_"开头
 @DeveloperApi
 case class ShuffleBlockId(shuffleId: Int, mapId: Int, reduceId: Int) extends BlockId {
   override def name: String = "shuffle_" + shuffleId + "_" + mapId + "_" + reduceId
 }
 
+// ShuffleDataBlock块的Id，name由"shuffle_"开头，以".data"结尾
 @DeveloperApi
 case class ShuffleDataBlockId(shuffleId: Int, mapId: Int, reduceId: Int) extends BlockId {
   override def name: String = "shuffle_" + shuffleId + "_" + mapId + "_" + reduceId + ".data"
 }
 
+// ShuffleIndexBlock块的Id，name由"shuffle_"开头，以".index"结尾
 @DeveloperApi
 case class ShuffleIndexBlockId(shuffleId: Int, mapId: Int, reduceId: Int) extends BlockId {
   override def name: String = "shuffle_" + shuffleId + "_" + mapId + "_" + reduceId + ".index"
 }
 
+// BroadcastBlock块的Id，name由"broadcast_"开头
 @DeveloperApi
 case class BroadcastBlockId(broadcastId: Long, field: String = "") extends BlockId {
   override def name: String = "broadcast_" + broadcastId + (if (field == "") "" else "_" + field)
 }
 
+// TaskResultBlock块的Id，name由"taskresult_"开头
 @DeveloperApi
 case class TaskResultBlockId(taskId: Long) extends BlockId {
   override def name: String = "taskresult_" + taskId
 }
 
+// StreamBlock块的Id，name由"input-"开头
 @DeveloperApi
 case class StreamBlockId(streamId: Int, uniqueId: Long) extends BlockId {
   override def name: String = "input-" + streamId + "-" + uniqueId
 }
 
-/** Id associated with temporary local data managed as blocks. Not serializable. */
+/** Id associated with temporary local data managed as blocks. Not serializable.
+  * TempLocalBlock块的Id，name由"temp_local_"开头
+  **/
 private[spark] case class TempLocalBlockId(id: UUID) extends BlockId {
   override def name: String = "temp_local_" + id
 }
 
-/** Id associated with temporary shuffle data managed as blocks. Not serializable. */
+/** Id associated with temporary shuffle data managed as blocks. Not serializable.
+  * TempShuffleBlock块的Id，name由"temp_shuffle_"开头
+  **/
 private[spark] case class TempShuffleBlockId(id: UUID) extends BlockId {
   override def name: String = "temp_shuffle_" + id
 }
 
 // Intended only for testing purposes
+// TestBlock块的Id，name由"test_"开头
 private[spark] case class TestBlockId(id: String) extends BlockId {
   override def name: String = "test_" + id
 }
 
 @DeveloperApi
 object BlockId {
+  // 方便使用的正则表达式
   val RDD = "rdd_([0-9]+)_([0-9]+)".r
   val SHUFFLE = "shuffle_([0-9]+)_([0-9]+)_([0-9]+)".r
   val SHUFFLE_DATA = "shuffle_([0-9]+)_([0-9]+)_([0-9]+).data".r
@@ -120,7 +135,9 @@ object BlockId {
   val STREAM = "input-([0-9]+)-([0-9]+)".r
   val TEST = "test_(.*)".r
 
-  /** Converts a BlockId "name" String back into a BlockId. */
+  /** Converts a BlockId "name" String back into a BlockId.
+    * 用于根据传入的id，即name名称来创建对应的BlockId
+    **/
   def apply(id: String): BlockId = id match {
     case RDD(rddId, splitIndex) =>
       RDDBlockId(rddId.toInt, splitIndex.toInt)

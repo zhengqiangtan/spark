@@ -66,17 +66,25 @@ class BlockManagerMasterEndpoint(
   // BlockId与存储了此BlockId对应Block的BlockManager的BlockManagerId之间的一对多关系缓存。
   private val blockLocations = new JHashMap[BlockId, mutable.HashSet[BlockManagerId]]
 
+  // 执行询问操作会使用到的线程池
   private val askThreadPool = ThreadUtils.newDaemonCachedThreadPool("block-manager-ask-thread-pool")
+  // 转为了隐式对象
   private implicit val askExecutionContext = ExecutionContext.fromExecutorService(askThreadPool)
 
-  // 对集群所有节点的拓扑结构的映射。
+  // 拓扑映射处理类，用于处理集群所有节点的拓扑结构的映射关系
   private val topologyMapper = {
+    /**
+      * 从spark.storage.replication.topologyMapper参数获取处理拓扑映射的类的类名，
+      * 默认为DefaultTopologyMapper类型的类名
+      */
     val topologyMapperClassName = conf.get(
       "spark.storage.replication.topologyMapper", classOf[DefaultTopologyMapper].getName)
+    // 反射创建拓扑映射类的实例
     val clazz = Utils.classForName(topologyMapperClassName)
     val mapper =
       clazz.getConstructor(classOf[SparkConf]).newInstance(conf).asInstanceOf[TopologyMapper]
     logInfo(s"Using $topologyMapperClassName for getting topology information")
+    // 返回创建好的实例
     mapper
   }
 
@@ -318,6 +326,7 @@ class BlockManagerMasterEndpoint(
       filter: BlockId => Boolean,
       askSlaves: Boolean): Future[Seq[BlockId]] = {
     val getMatchingBlockIds = GetMatchingBlockIds(filter)
+    // 这里用到了隐式参数askExecutionContext
     Future.sequence(
       blockManagerInfo.values.map { info =>
         val future =
@@ -480,46 +489,63 @@ object BlockStatus {
 }
 
 private[spark] class BlockManagerInfo(
-    val blockManagerId: BlockManagerId,
-    timeMs: Long,
-    val maxMem: Long,
-    val slaveEndpoint: RpcEndpointRef)
+    val blockManagerId: BlockManagerId, // 对应BlockManager的BlockManagerId
+    timeMs: Long, // 创建时间
+    val maxMem: Long, // BlockManager中剩余可用内存的大小
+    val slaveEndpoint: RpcEndpointRef) // 对应的BlockManager所在节点的BlockManagerSlaveEndpointRef
   extends Logging {
 
+  // 记录最后一次访问当前BlockManagerInfo的时间
   private var _lastSeenMs: Long = timeMs
+  // 记录当前BlockManagerInfo对应的BlockManager管理的所有数据块的剩余的可用内存大小
   private var _remainingMem: Long = maxMem
 
   // Mapping from block id to its status.
+  // 记录当前BlockManagerInfo对应的BlockManager管理的所有数据块的BlockStatus状态对象
   private val _blocks = new JHashMap[BlockId, BlockStatus]
 
   // Cached blocks held by this BlockManager. This does not include broadcast blocks.
+  // 记录当前BlockManagerInfo对应的BlockManager管理的数据块，但不包括Broadcast数据块
   private val _cachedBlocks = new mutable.HashSet[BlockId]
 
+  // 获取指定数据块的BlockStatus
   def getStatus(blockId: BlockId): Option[BlockStatus] = Option(_blocks.get(blockId))
 
   def updateLastSeenMs() {
     _lastSeenMs = System.currentTimeMillis()
   }
 
+  // 更新指定数据块的BlockStatus信息
   def updateBlockInfo(
       blockId: BlockId,
       storageLevel: StorageLevel,
       memSize: Long,
       diskSize: Long) {
 
+    // 更新时间最后一次访问当前BlockManagerInfo的时间
     updateLastSeenMs()
 
-    if (_blocks.containsKey(blockId)) {
+    // 判断当前BlockManagerInfo对应的BlockManager是否管理着指定的数据块
+    if (_blocks.containsKey(blockId)) { // 存在，即管理着
       // The block exists on the slave already.
+      // 获取数据块对应的BlockStatus
       val blockStatus: BlockStatus = _blocks.get(blockId)
+      // 记录旧的值
       val originalLevel: StorageLevel = blockStatus.storageLevel
       val originalMemSize: Long = blockStatus.memSize
 
+      // 检查原来的存储级别是否使用了内存存储
       if (originalLevel.useMemory) {
+        /**
+          * 因为原来的存储级别使用的内存，现在要对其进行修改，
+          * 则先将旧的内存值累加到_remainingMem中，说明将该数据块原来使用的内存大小归还了，
+          * 在后面的操作还会将新的内存值从_remainingMem中减去，说明又将特定的内存大小分配给该数据块了。
+          */
         _remainingMem += originalMemSize
       }
     }
 
+    // 检查设置的存储级别是否有效，即数据块使用了内存或磁盘存储级别，且副本数量大于1
     if (storageLevel.isValid) {
       /* isValid means it is either stored in-memory or on-disk.
        * The memSize here indicates the data size in or dropped from memory,
@@ -527,29 +553,44 @@ private[spark] class BlockManagerInfo(
        * and the diskSize here indicates the data size in or dropped to disk.
        * They can be both larger than 0, when a block is dropped from memory to disk.
        * Therefore, a safe way to set BlockStatus is to set its info in accurate modes. */
+      // 设置的存储级别有效
       var blockStatus: BlockStatus = null
-      if (storageLevel.useMemory) {
+      // Q: 疑问：为什么内存和存储只会使用一个？？？
+      if (storageLevel.useMemory) { // 使用内存存储级别
+        // 构建新的BlockStatus对象，磁盘存储为0
         blockStatus = BlockStatus(storageLevel, memSize = memSize, diskSize = 0)
+        // 更新_blocks字典
         _blocks.put(blockId, blockStatus)
+        // 将特定的内存大小分配给该数据块了，所以需要从总的剩余内存中减去
         _remainingMem -= memSize
         logInfo("Added %s in memory on %s (size: %s, free: %s)".format(
           blockId, blockManagerId.hostPort, Utils.bytesToString(memSize),
           Utils.bytesToString(_remainingMem)))
       }
-      if (storageLevel.useDisk) {
+      if (storageLevel.useDisk) { // 使用磁盘存储级别
+        // 构建新的BlockStatus对象，内存存储为0
         blockStatus = BlockStatus(storageLevel, memSize = 0, diskSize = diskSize)
+        // 更新_blocks字典
         _blocks.put(blockId, blockStatus)
         logInfo("Added %s on disk on %s (size: %s)".format(
           blockId, blockManagerId.hostPort, Utils.bytesToString(diskSize)))
       }
+
+      // 检查数据块是否不是Broadcast数据块，且已经存在缓存数据
       if (!blockId.isBroadcast && blockStatus.isCached) {
+        // 如果是，将其记录到_cachedBlocks缓存集合
         _cachedBlocks += blockId
       }
-    } else if (_blocks.containsKey(blockId)) {
+    } else if (_blocks.containsKey(blockId)) { // 存储级别无效，检查当前BlockManager是否管理该数据块
+      // 说明此时是需要将该数据块进行移除的
       // If isValid is not true, drop the block.
+      // 获取对应的BlockStatus
       val blockStatus: BlockStatus = _blocks.get(blockId)
+      // 从_blocks中移除
       _blocks.remove(blockId)
+      // 从_cachedBlocks中移除
       _cachedBlocks -= blockId
+      // 打印日志
       if (blockStatus.storageLevel.useMemory) {
         logInfo("Removed %s on %s in memory (size: %s, free: %s)".format(
           blockId, blockManagerId.hostPort, Utils.bytesToString(blockStatus.memSize),
@@ -562,26 +603,37 @@ private[spark] class BlockManagerInfo(
     }
   }
 
+  // 移除指定数据块
   def removeBlock(blockId: BlockId) {
-    if (_blocks.containsKey(blockId)) {
+    // 先判断是否存在该数据块
+    if (_blocks.containsKey(blockId)) { // 存在
+      // 归还数据块占用的内存给_remainingMem
       _remainingMem += _blocks.get(blockId).memSize
+      // 从_blocks中移除
       _blocks.remove(blockId)
     }
+    // 从_cachedBlocks中移除
     _cachedBlocks -= blockId
   }
 
+  // 获取当前BlockManagerInfo对应的BlockManager管理的内存剩余的总大小
   def remainingMem: Long = _remainingMem
 
+  // 获取当前BlockManagerinfo最后被访问的事件
   def lastSeenMs: Long = _lastSeenMs
 
+  // 获取_block
   def blocks: JHashMap[BlockId, BlockStatus] = _blocks
 
   // This does not include broadcast blocks.
+  // 获取被缓存的数据块的BlockId集合
   def cachedBlocks: collection.Set[BlockId] = _cachedBlocks
 
   override def toString: String = "BlockManagerInfo " + timeMs + " " + _remainingMem
 
+  // 清除所有管理的数据块
   def clear() {
+    // Q: 为什么清除所有数据块时不归还内存给_remainingMem
     _blocks.clear()
   }
 }

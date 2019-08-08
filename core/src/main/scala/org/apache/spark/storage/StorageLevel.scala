@@ -38,7 +38,7 @@ import org.apache.spark.util.Utils
   * @param _useDisk 能否写入磁盘。当Block的StorageLevel中的_useDisk为true时，存储体系将允许Block写入磁盘。
   * @param _useMemory 能否写入堆内存。当Block的StorageLevel中的_useMemory为true时，存储体系将允许Block写入堆内存。
   * @param _useOffHeap 能否写入堆外内存。当Block的StorageLevel中的_useOffHeap为true时，存储体系将允许Block写入堆外内存。
-  * @param _deserialized 是否需要对Block反序列化。当Block本身经过了序列化后，Block的StorageLevel中的_deserialized将被设置为false，即可以对Block进行反序列化。
+  * @param _deserialized 表示数据是否已被反序列化。当Block本身经过了序列化后，Block的StorageLevel中的_deserialized将被设置为false，即表示在使用数据时需要对Block进行反序列化。
   * @param _replication Block的复制份数。Block的StorageLevel中的_replication默认等于1，可以在构造Block的StorageLevel时明确指定_replication的数量。
   *                     当_replication大于1时，Block除了在本地的存储体系中写入一份，还会复制到其他不同节点的存储体系中写入，达到复制备份的目的。
   */
@@ -53,38 +53,48 @@ class StorageLevel private(
 
   // TODO: Also add fields for caching priority, dataset ID, and flushing.
   private def this(flags: Int, replication: Int) {
-    this((flags & 8) != 0, (flags & 4) != 0, (flags & 2) != 0, (flags & 1) != 0, replication)
+    this((flags & 8) != 0, // 是否使用磁盘
+      (flags & 4) != 0, // 是否使用内存
+      (flags & 2) != 0, // 是否使用堆外内存
+      (flags & 1) != 0, // 是否已被反序列化
+      replication) // 副本数量
   }
 
+  // 创建用于反序列化的StorageLevel对象
   def this() = this(false, true, false, false)  // For deserialization
 
-  // 能否写入磁盘。
+  // 能否写入磁盘
   def useDisk: Boolean = _useDisk
-  // 能否写入堆内存。
+  // 能否写入堆内存
   def useMemory: Boolean = _useMemory
-  // 能否写入堆外内存。
+  // 能否写入堆外内存
   def useOffHeap: Boolean = _useOffHeap
-  // 是否需要对Block反序列化。
+  // 数据块是否已被反序列化
   def deserialized: Boolean = _deserialized
-  // 复制份数。
+  // 复制份数
   def replication: Int = _replication
 
+  // 副本数量必须小于40
   assert(replication < 40, "Replication restricted to be less than 40 for calculating hash codes")
 
+  // 当使用堆外内存存储时，数据必须序列化存储
   if (useOffHeap) {
     require(!deserialized, "Off-heap storage level does not support deserialized storage")
   }
 
-  // 内存模式。如果useOffHeap为true，则返回MemoryMode.OFF_HEAP，否则返回MemoryMode.ON_HEAP。
+  // 内存模式
   private[spark] def memoryMode: MemoryMode = {
+    // 如果useOffHeap为true，则返回MemoryMode.OFF_HEAP
     if (useOffHeap) MemoryMode.OFF_HEAP
-    else MemoryMode.ON_HEAP
+    else MemoryMode.ON_HEAP // 否则返回MemoryMode.ON_HEAP
   }
 
+  // 克隆操作，会返回一个新的StorageLevel对象
   override def clone(): StorageLevel = {
     new StorageLevel(useDisk, useMemory, useOffHeap, deserialized, replication)
   }
 
+  // 判断是否相等，需要所有属性都相同，才代表两个StorageLevel相等
   override def equals(other: Any): Boolean = other match {
     case s: StorageLevel =>
       s.useDisk == useDisk &&
@@ -96,7 +106,7 @@ class StorageLevel private(
       false
   }
 
-  // 当前的StorageLevel是否有效。
+  // 当前的StorageLevel是否有效：使用了内存或磁盘级别，且副本数量大于1
   def isValid: Boolean = (useMemory || useDisk) && (replication > 0)
 
   /**
@@ -122,7 +132,8 @@ class StorageLevel private(
 
   /**
     * 将StorageLevel首先通过toInt方法将_useDisk、_useMemory、_useOffHeap、_deserialized四个属性
-    * 设置到四位数的状态位，然后与_replication一起被序列化写入外部二进制流。
+    * 设置到四位数的状态位，
+    * 然后与_replication一起被序列化写入外部二进制流。
     */
   override def writeExternal(out: ObjectOutput): Unit = Utils.tryOrIOException {
     out.writeByte(toInt)
@@ -139,6 +150,7 @@ class StorageLevel private(
     _replication = in.readByte()
   }
 
+  // 缓存操作，会把当前StorageLevel缓存到伴生对象的storageLevelCache字典中
   @throws(classOf[IOException])
   private def readResolve(): Object = StorageLevel.getCachedStorageLevel(this)
 
@@ -189,6 +201,8 @@ object StorageLevel {
   /**
    * :: DeveloperApi ::
    * Return the StorageLevel object with the specified name.
+    *
+    * 从指定的字符串得到对应的存储级别
    */
   @DeveloperApi
   def fromString(s: String): StorageLevel = s match {
@@ -218,6 +232,7 @@ object StorageLevel {
       useOffHeap: Boolean,
       deserialized: Boolean,
       replication: Int): StorageLevel = {
+    // 创建，并进行缓存
     getCachedStorageLevel(
       new StorageLevel(useDisk, useMemory, useOffHeap, deserialized, replication))
   }
@@ -232,6 +247,7 @@ object StorageLevel {
       useMemory: Boolean,
       deserialized: Boolean,
       replication: Int = 1): StorageLevel = {
+    // 创建，并进行缓存
     getCachedStorageLevel(new StorageLevel(useDisk, useMemory, false, deserialized, replication))
   }
 
@@ -241,6 +257,7 @@ object StorageLevel {
    */
   @DeveloperApi
   def apply(flags: Int, replication: Int): StorageLevel = {
+    // 创建，并进行缓存
     getCachedStorageLevel(new StorageLevel(flags, replication))
   }
 
@@ -250,13 +267,16 @@ object StorageLevel {
    */
   @DeveloperApi
   def apply(in: ObjectInput): StorageLevel = {
+    // 从流中反序列化，并进行缓存
     val obj = new StorageLevel()
     obj.readExternal(in)
     getCachedStorageLevel(obj)
   }
 
+  // 用于缓存StorageLevel
   private[spark] val storageLevelCache = new ConcurrentHashMap[StorageLevel, StorageLevel]()
 
+  // 先推入缓存，如果推入失败，说明已存在；再进行取
   private[spark] def getCachedStorageLevel(level: StorageLevel): StorageLevel = {
     storageLevelCache.putIfAbsent(level, level)
     storageLevelCache.get(level)
