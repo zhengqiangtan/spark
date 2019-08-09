@@ -38,7 +38,14 @@ import org.apache.spark.util.Utils
 
 /**
  * A BlockTransferService that uses Netty to fetch a set of blocks at at time.
- */
+ *
+  * @param conf SparkConf
+  * @param securityManager 安全管理器
+  * @param bindAddress 绑定的地址
+  * @param hostName 绑定的主机名
+  * @param _port 绑定的端口
+  * @param numCores 使用的CPU Core数量
+  */
 private[spark] class NettyBlockTransferService(
     conf: SparkConf,
     securityManager: SecurityManager,
@@ -49,15 +56,23 @@ private[spark] class NettyBlockTransferService(
   extends BlockTransferService {
 
   // TODO: Don't use Java serialization, use a more cross-version compatible serialization format.
+  // Java序列化器；提示说明不要用Java序列化器，应该用一个版本兼容性更好的序列化器
   private val serializer = new JavaSerializer(conf)
+  // 是否开启了安全认证
   private val authEnabled = securityManager.isAuthenticationEnabled()
+  // 传输层TransportConf配置对象
   private val transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle", numCores)
 
+  // 传输层TransportContext上下文对象
   private[this] var transportContext: TransportContext = _
+  // TransportServer服务端
   private[this] var server: TransportServer = _
+  // 创建TransportClient的工厂
   private[this] var clientFactory: TransportClientFactory = _
+  // BlockTransferService服务的应用的ID
   private[this] var appId: String = _
 
+  // 初始化方法
   override def init(blockDataManager: BlockDataManager): Unit = {
     /**
       * 创建NettyBlockRpcServer，NettyBlockRpcServer继承了RpcHandler，
@@ -68,6 +83,7 @@ private[spark] class NettyBlockTransferService(
     // 准备服务端和客户端的引导程序
     var serverBootstrap: Option[TransportServerBootstrap] = None
     var clientBootstrap: Option[TransportClientBootstrap] = None
+    // 如果开启了认证，需要在客户端和服务端分别添加支持认证的引导程序
     if (authEnabled) {
       serverBootstrap = Some(new SaslServerBootstrap(transportConf, securityManager))
       clientBootstrap = Some(new SaslClientBootstrap(transportConf, conf.getAppId, securityManager,
@@ -84,13 +100,19 @@ private[spark] class NettyBlockTransferService(
     logInfo(s"Server created on ${hostName}:${server.getPort}")
   }
 
-  /** Creates and binds the TransportServer, possibly trying multiple ports. */
+  /** Creates and binds the TransportServer, possibly trying multiple ports.
+    * 创建TransportServer
+    **/
   private def createServer(bootstraps: List[TransportServerBootstrap]): TransportServer = {
+    // 定义启动TransportServer的方法
     def startService(port: Int): (TransportServer, Int) = {
+      // 使用TransportContext创建服务端，绑定大特定的地址和端口上
       val server = transportContext.createServer(bindAddress, port, bootstraps.asJava)
+      // 返回TransportServer和绑定的端口
       (server, server.getPort)
     }
 
+    // 这个方法用于真正创建和启动TransportServer，它会在端口被占用的情况下逐个重试启动
     Utils.startServiceOnPort(_port, startService, conf, getClass.getName)._1
   }
 

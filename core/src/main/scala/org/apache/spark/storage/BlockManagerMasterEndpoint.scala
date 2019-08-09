@@ -151,10 +151,13 @@ class BlockManagerMasterEndpoint(
       context.reply(heartbeatReceived(blockManagerId))
 
     case HasCachedBlocks(executorId) =>
+      // 从blockManagerIdByExecutor获取对应的BlockManagerId
       blockManagerIdByExecutor.get(executorId) match {
         case Some(bm) =>
+          // 获取对应的BlockManagerInfo
           if (blockManagerInfo.contains(bm)) {
             val bmInfo = blockManagerInfo(bm)
+            // 使用BlockManagerInfo来进行判断
             context.reply(bmInfo.cachedBlocks.nonEmpty)
           } else {
             context.reply(false)
@@ -163,23 +166,36 @@ class BlockManagerMasterEndpoint(
       }
   }
 
+  // 移除指定RDD的所有数据块
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {
     // First remove the metadata for the given RDD, and then asynchronously remove the blocks
     // from the slaves.
 
     // Find all blocks for the given RDD, remove the block from both blockLocations and
     // the blockManagerInfo that is tracking the blocks.
+    /**
+      * 从blockLocations中过滤出所有属于该RDD的数据块的BlockId；该过滤过程基于以下两点：
+      * 1. 数据块BlockId的类型需要是RDDBlockId；
+      * 2. 该RDDBlockId的rddId要与传入的rddId参数相同。
+      */
     val blocks = blockLocations.asScala.keys.flatMap(_.asRDDId).filter(_.rddId == rddId)
+
+    // 遍历这些BlockId
     blocks.foreach { blockId =>
+      // 获取数据块所在的BlockManager的标识
       val bms: mutable.HashSet[BlockManagerId] = blockLocations.get(blockId)
+      // 获取对应的BlockManagerInfo，使用BlockManagerInfo的removeBlock()方法处理
       bms.foreach(bm => blockManagerInfo.get(bm).foreach(_.removeBlock(blockId)))
+      // 移除该数据块的位置信息
       blockLocations.remove(blockId)
     }
 
     // Ask the slaves to remove the RDD, and put the result in a sequence of Futures.
     // The dispatcher is used as an implicit argument into the Future sequence construction.
+    // 构造RemoveRdd消息
     val removeMsg = RemoveRdd(rddId)
     Future.sequence(
+      // 向所有BlockManager广播RemoveRdd消息，通知它们
       blockManagerInfo.values.map { bm =>
         bm.slaveEndpoint.ask[Int](removeMsg)
       }.toSeq
@@ -188,7 +204,9 @@ class BlockManagerMasterEndpoint(
 
   private def removeShuffle(shuffleId: Int): Future[Seq[Boolean]] = {
     // Nothing to do in the BlockManagerMasterEndpoint data structures
+    // 构造RemoveShuffle消息
     val removeMsg = RemoveShuffle(shuffleId)
+    // 委托给所有BlockManager处理
     Future.sequence(
       blockManagerInfo.values.map { bm =>
         bm.slaveEndpoint.ask[Boolean](removeMsg)
@@ -202,31 +220,48 @@ class BlockManagerMasterEndpoint(
    * from the executors, but not from the driver.
    */
   private def removeBroadcast(broadcastId: Long, removeFromDriver: Boolean): Future[Seq[Int]] = {
+    // 构造RemoveBroadcast消息
     val removeMsg = RemoveBroadcast(broadcastId, removeFromDriver)
+    /**
+      * 根据removeFromDriver过滤出需要通知的BlockManager
+      * removeFromDriver参数决定了Driver上的相关数据块是否也要移除
+      */
     val requiredBlockManagers = blockManagerInfo.values.filter { info =>
       removeFromDriver || !info.blockManagerId.isDriver
     }
     Future.sequence(
+      // 向所有需要通知的BlockManager发送RemoveBroadcast消息
       requiredBlockManagers.map { bm =>
         bm.slaveEndpoint.ask[Int](removeMsg)
       }.toSeq
     )
   }
 
+  // 移除指定的BlockManagerId
   private def removeBlockManager(blockManagerId: BlockManagerId) {
+    // 获取对应的BlockManagerInfo
     val info = blockManagerInfo(blockManagerId)
 
     // Remove the block manager from blockManagerIdByExecutor.
+    // 移除记录的BlockManagerId
     blockManagerIdByExecutor -= blockManagerId.executorId
 
     // Remove it from blockManagerInfo and remove all the blocks.
+    // 移除记录的BlockManagerInfo
     blockManagerInfo.remove(blockManagerId)
+
+    // 从BlockManagerInfo中获取该Executor管理的数据块的迭代器
     val iterator = info.blocks.keySet.iterator
+    // 迭代数据块
     while (iterator.hasNext) {
       val blockId = iterator.next
+      // 获取数据块的位置序列
       val locations = blockLocations.get(blockId)
+      // 因为Executor被移除了，因此数据块中关于该BlockManager的位置信息也应该被移除
       locations -= blockManagerId
+      // 如果数据块的位置信息为空，说明该数据块被移除了
       if (locations.size == 0) {
+        // 从blockLocations中移除该数据块的位置记录
         blockLocations.remove(blockId)
       }
     }
@@ -234,8 +269,10 @@ class BlockManagerMasterEndpoint(
     logInfo(s"Removing block manager $blockManagerId")
   }
 
+  // 移除指定的Executor
   private def removeExecutor(execId: String) {
     logInfo("Trying to remove executor " + execId + " from BlockManagerMaster.")
+    // 从blockManagerIdByExecutor中获取对应的BlockManagerId，然后交给removeBlockManager()方法
     blockManagerIdByExecutor.get(execId).foreach(removeBlockManager)
   }
 
@@ -275,12 +312,14 @@ class BlockManagerMasterEndpoint(
 
   // Return a map from the block manager id to max memory and remaining memory.
   private def memoryStatus: Map[BlockManagerId, (Long, Long)] = {
+    // 从缓存中通过BlockManagerInfo来获取
     blockManagerInfo.map { case(blockManagerId, info) =>
       (blockManagerId, (info.maxMem, info.remainingMem))
     }.toMap
   }
 
   private def storageStatus: Array[StorageStatus] = {
+    // 从缓存中通过BlockManagerInfo来获取
     blockManagerInfo.map { case (blockManagerId, info) =>
       new StorageStatus(blockManagerId, info.maxMem, info.blocks.asScala)
     }.toArray
@@ -297,17 +336,24 @@ class BlockManagerMasterEndpoint(
   private def blockStatus(
       blockId: BlockId,
       askSlaves: Boolean): Map[BlockManagerId, Future[Option[BlockStatus]]] = {
+
+    // 构造GetBlockStatus消息
     val getBlockStatus = GetBlockStatus(blockId)
     /*
      * Rather than blocking on the block status query, master endpoint should simply return
      * Futures to avoid potential deadlocks. This can arise if there exists a block manager
      * that is also waiting for this master endpoint's response to a previous message.
+     *
+     * 委托给BlockManager进行处理
      */
     blockManagerInfo.values.map { info =>
       val blockStatusFuture =
+        // 如果需要问询Slave角色的BlockManager
         if (askSlaves) {
+          // 就向它们发送消息
           info.slaveEndpoint.ask[Option[BlockStatus]](getBlockStatus)
         } else {
+          // 否则直接从BlockManagerInfo中获取缓存的信息
           Future { info.getStatus(blockId) }
         }
       (info.blockManagerId, blockStatusFuture)
@@ -325,14 +371,18 @@ class BlockManagerMasterEndpoint(
   private def getMatchingBlockIds(
       filter: BlockId => Boolean,
       askSlaves: Boolean): Future[Seq[BlockId]] = {
+    // 构造GetMatchingBlockIds消息
     val getMatchingBlockIds = GetMatchingBlockIds(filter)
     // 这里用到了隐式参数askExecutionContext
     Future.sequence(
       blockManagerInfo.values.map { info =>
         val future =
+          // 判断是否需要从Slave BlockMaster获取最新的
           if (askSlaves) {
+            // 需要，向它们发送GetMatchingBlockIds消息获取
             info.slaveEndpoint.ask[Seq[BlockId]](getMatchingBlockIds)
           } else {
+            // 不需要，直接从本地缓存获取
             Future { info.blocks.asScala.keys.filter(filter).toSeq }
           }
         future
@@ -342,7 +392,8 @@ class BlockManagerMasterEndpoint(
 
   /**
    * Returns the BlockManagerId with topology information populated, if available.
-    * BlockManagerMasterEndpoint在接收到RegisterBlockManager消息后，将调用该方法
+    * BlockManagerMasterEndpoint在接收到RegisterBlockManager消息后，
+    * 将调用该方法将指定的BlockManager的信息注册到自己所管理的信息中
    */
   private def register(
       idWithoutTopologyInfo: BlockManagerId,
@@ -360,6 +411,7 @@ class BlockManagerMasterEndpoint(
       idWithoutTopologyInfo.port,
       topologyMapper.getTopologyForHost(idWithoutTopologyInfo.host))
 
+    // 记录当前时间
     val time = System.currentTimeMillis()
     if (!blockManagerInfo.contains(id)) { // 当前并未管理该BlockManagerId的BlockManagerInfo对象
       // 根据BlockManagerId中保存的Executor ID获取旧的BlockManagerId
@@ -390,6 +442,7 @@ class BlockManagerMasterEndpoint(
     id
   }
 
+  // 更新指定的数据块
   private def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,
@@ -397,6 +450,7 @@ class BlockManagerMasterEndpoint(
       memSize: Long,
       diskSize: Long): Boolean = {
 
+    // 判断是否存在对应的BlockManager
     if (!blockManagerInfo.contains(blockManagerId)) {
       if (blockManagerId.isDriver && !isLocal) {
         // We intentionally do not register the master (except in local mode),
@@ -407,13 +461,17 @@ class BlockManagerMasterEndpoint(
       }
     }
 
+    // 检查参数
     if (blockId == null) {
+      // 如果指定的数据块的BlockId为空，仅仅更新BlockManagerInfo中记录的最后更新时间
       blockManagerInfo(blockManagerId).updateLastSeenMs()
       return true
     }
 
+    // 使用BlockManager对应的BlockManagerInfo的updateBlockInfo(...)方法进行处理
     blockManagerInfo(blockManagerId).updateBlockInfo(blockId, storageLevel, memSize, diskSize)
 
+    // 维护数据块的位置信息
     var locations: mutable.HashSet[BlockManagerId] = null
     if (blockLocations.containsKey(blockId)) {
       locations = blockLocations.get(blockId)
@@ -422,6 +480,7 @@ class BlockManagerMasterEndpoint(
       blockLocations.put(blockId, locations)
     }
 
+    // 存储级别有效，需要将BlockManagerId添加到数据块的位置信息中
     if (storageLevel.isValid) {
       locations.add(blockManagerId)
     } else {
@@ -429,6 +488,7 @@ class BlockManagerMasterEndpoint(
     }
 
     // Remove the block from master tracking if it has been removed on all slaves.
+    // 如果数据块的位置信息为空，则将其从blockLocations中移除
     if (locations.size == 0) {
       blockLocations.remove(blockId)
     }
@@ -436,17 +496,21 @@ class BlockManagerMasterEndpoint(
   }
 
   private def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
+    // 从blockLocations中获取
     if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty
   }
 
   private def getLocationsMultipleBlockIds(
       blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
+    // 遍历BlockId数组，交给getLocations()方法获取
     blockIds.map(blockId => getLocations(blockId))
   }
 
   /** Get the list of the peers of the given block manager */
   private def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {
+    // 从blockManagerInfo字典获取所有的BlockManagerId
     val blockManagerIds = blockManagerInfo.keySet
+    // 将传入的BlockManagerId过滤掉
     if (blockManagerIds.contains(blockManagerId)) {
       blockManagerIds.filterNot { _.isDriver }.filterNot { _ == blockManagerId }.toSeq
     } else {
@@ -458,10 +522,12 @@ class BlockManagerMasterEndpoint(
    * Returns an [[RpcEndpointRef]] of the [[BlockManagerSlaveEndpoint]] for sending RPC messages.
    */
   private def getExecutorEndpointRef(executorId: String): Option[RpcEndpointRef] = {
+    // 从blockManagerIdByExecutor和blockManagerInfo中取得对应的BlockManagerInfo
     for (
       blockManagerId <- blockManagerIdByExecutor.get(executorId);
       info <- blockManagerInfo.get(blockManagerId)
     ) yield {
+      // 直接从BlockManagerInfo中获取对应的RpcEndpointRef
       info.slaveEndpoint
     }
   }

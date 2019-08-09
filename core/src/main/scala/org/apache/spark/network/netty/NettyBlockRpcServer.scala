@@ -38,7 +38,11 @@ import org.apache.spark.storage.{BlockId, StorageLevel}
  *
  * Opened blocks are registered with the "one-for-one" strategy, meaning each Transport-layer Chunk
  * is equivalent to one Spark-level shuffle block.
- */
+ *
+  * @param appId 当前应用的Application ID
+  * @param serializer 序列化器
+  * @param blockManager 所属的BlockManager
+  */
 class NettyBlockRpcServer(
     appId: String,
     serializer: Serializer,
@@ -56,7 +60,7 @@ class NettyBlockRpcServer(
     val message = BlockTransferMessage.Decoder.fromByteBuffer(rpcMessage)
     logTrace(s"Received request: $message")
 
-    // 根据消息类型分贝处理
+    // 根据消息类型分别处理
     message match {
       case openBlocks: OpenBlocks => // 打开Block的消息
         // 取出消息携带的BlockId数组，获取每个BlockId对应的Block的ManagedBuffer，封装为序列
@@ -89,5 +93,6 @@ class NettyBlockRpcServer(
   }
 
   // 返回OneForOneStreamManager对象
-  override def getStreamManager(): StreamManager = streamManager
+  override def
+  getStreamManager(): StreamManager = streamManager
 }

@@ -36,23 +36,33 @@ import org.apache.spark.util.{RpcUtils, ThreadUtils}
   */
 private[spark]
 class BlockManagerMaster(
-    var driverEndpoint: RpcEndpointRef,
+    var driverEndpoint: RpcEndpointRef, // 记录的是BlockManagerMasterEndpointRef
     conf: SparkConf,
     isDriver: Boolean)
   extends Logging {
 
+  /**
+    * 根据spark.rpc.askTimeout或spark.network.timeout参数指定时长创建超时管理器
+    * 默认超时时间为120s
+    */
   val timeout = RpcUtils.askRpcTimeout(conf)
 
-  /** Remove a dead executor from the driver endpoint. This is only called on the driver side. */
+  /** Remove a dead executor from the driver endpoint. This is only called on the driver side.
+    * 根据Executor ID移除Driver或Executor
+    **/
   def removeExecutor(execId: String) {
+    // 需要通知BlockManagerMasterEndpoint，即向它发送RemoveExecutor消息
     tell(RemoveExecutor(execId))
     logInfo("Removed " + execId + " successfully in removeExecutor")
   }
 
   /** Request removal of a dead executor from the driver endpoint.
    *  This is only called on the driver side. Non-blocking
+    *
+    *  根据Executor ID异步移除Driver或Executor
    */
   def removeExecutorAsync(execId: String) {
+    // 向它发送BlockManagerMasterEndpoint消息；ask操作是个异步操作，它会返回一个Future对象
     driverEndpoint.ask[Boolean](RemoveExecutor(execId))
     logInfo("Removal of executor " + execId + " requested")
   }
@@ -61,7 +71,15 @@ class BlockManagerMaster(
    * Register the BlockManager's id with the driver. The input BlockManagerId does not contain
    * topology information. This information is obtained from the master and we respond with an
    * updated BlockManagerId fleshed out with this information.
-   */
+    *
+    * 注册BlockManager
+    *
+    * @param blockManagerId BlockManager的唯一标识
+    * @param maxMemSize BlockManager管理的最大内存大小（字节）
+    * @param slaveEndpoint BlockManager上的BlockManagerSlaveEndpoint，
+    *                      主要用于BlockManagerMasterEndpoint与该BlockManager通信
+    * @return 由BlockManagerMasterEndpoint分配的正式BlockManagerId
+    */
   def registerBlockManager(
       blockManagerId: BlockManagerId,
       maxMemSize: Long,
@@ -70,7 +88,7 @@ class BlockManagerMaster(
     /**
       * 向BlockManagerMasterEndpoint发送RegisterBlockManager消息
       * RegisterBlockManager将携带要注册的BlockManager的blockManagerId、
-      * 最大内存大小及slaveEndpoint（即BlockManagerSlaveEndpoint）
+      * 最大内存大小及BlockManagerSlaveEndpoint
       */
     val updatedId = driverEndpoint.askWithRetry[BlockManagerId](
       RegisterBlockManager(blockManagerId, maxMemSize, slaveEndpoint))
@@ -78,26 +96,50 @@ class BlockManagerMaster(
     updatedId
   }
 
+  /**
+    * 更新指定BlockManager管理的指定数据块的信息
+    * @param blockManagerId BlockManager的唯一标识
+    * @param blockId 指定的数据块的BlockId
+    * @param storageLevel 更新的存储级别
+    * @param memSize 更新的内存使用大小
+    * @param diskSize 更新的磁盘使用大小
+    *
+    * @return 是否更新成功
+    */
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,
       storageLevel: StorageLevel,
       memSize: Long,
       diskSize: Long): Boolean = {
-    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信，发送UpdateBlockInfo消息
     val res = driverEndpoint.askWithRetry[Boolean](
       UpdateBlockInfo(blockManagerId, blockId, storageLevel, memSize, diskSize))
     logDebug(s"Updated info of block $blockId")
     res
   }
 
-  /** Get locations of the blockId from the driver */
+  /** Get locations of the blockId from the driver
+    * 获取指定数据块的位置信息
+    * @param blockId 指定的数据块的BlockId
+    *
+    * @return 返回数据块所在的BlockManager的BlockManagerId的集合
+    **/
   def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信，发送GetLocations消息
     driverEndpoint.askWithRetry[Seq[BlockManagerId]](GetLocations(blockId))
   }
 
-  /** Get locations of multiple blockIds from the driver */
+  /** Get locations of multiple blockIds from the driver
+    * 获取多个指定数据块的位置信息
+    *
+    * @param blockIds 指定的数据块的BlockId集合
+    *
+    * @return 返回数据块所在的BlockManager的BlockManagerId集合的索引集合
+    *         即索引对应于传入的BlockId的索引，索引位上为该数据块所在的BlockManager的ID标识
+    **/
   def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信，发送GetLocationsMultipleBlockIds消息
     driverEndpoint.askWithRetry[IndexedSeq[Seq[BlockManagerId]]](
       GetLocationsMultipleBlockIds(blockIds))
   }
@@ -105,31 +147,48 @@ class BlockManagerMaster(
   /**
    * Check if block manager master has a block. Note that this can be used to check for only
    * those blocks that are reported to block manager master.
+    *
+    * 判断当前所有BlockManager中是否管理着指定的数据块
    */
   def contains(blockId: BlockId): Boolean = {
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef进行通信，发送GetLocationsMultipleBlockIds消息
     !getLocations(blockId).isEmpty
   }
 
-  /** Get ids of other nodes in the cluster from the driver */
+  /** Get ids of other nodes in the cluster from the driver
+    * 获取其它的BlockManager的BlockManagerId集合
+    **/
   def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {
+    // 发送GetPeers消息
     driverEndpoint.askWithRetry[Seq[BlockManagerId]](GetPeers(blockManagerId))
   }
 
+  /**
+    * 获取Executor ID指定的Executor的RpcEndpointRef
+    * @param executorId
+    * @return
+    */
   def getExecutorEndpointRef(executorId: String): Option[RpcEndpointRef] = {
+    // 使用BlockManagerMasterEndpoint的RpcEndpointRef发送发送GetExecutorEndpointRef消息
     driverEndpoint.askWithRetry[Option[RpcEndpointRef]](GetExecutorEndpointRef(executorId))
   }
 
   /**
    * Remove a block from the slaves that have it. This can only be used to remove
    * blocks that the driver knows about.
+    *
+    * 移除指定的数据块
    */
   def removeBlock(blockId: BlockId) {
-    // 向BlockManagerMasterEndpoin发送RemoveBlock消息以删除Block
+    // 向BlockManagerMasterEndpoint发送RemoveBlock消息以删除Block
     driverEndpoint.askWithRetry[Boolean](RemoveBlock(blockId))
   }
 
-  /** Remove all blocks belonging to the given RDD. */
+  /** Remove all blocks belonging to the given RDD.
+    * 移除属于给定RDD的所有数据块，第二个参数指定是否阻塞
+    **/
   def removeRdd(rddId: Int, blocking: Boolean) {
+    // 向BlockManagerMasterEndpoint发送RemoveRdd消息以删除Block
     val future = driverEndpoint.askWithRetry[Future[Seq[Int]]](RemoveRdd(rddId))
     future.onFailure {
       case e: Exception =>
@@ -140,8 +199,11 @@ class BlockManagerMaster(
     }
   }
 
-  /** Remove all blocks belonging to the given shuffle. */
+  /** Remove all blocks belonging to the given shuffle.
+    * 移除属于给定Shuffle的所有数据块，第二个参数指定是否阻塞
+    **/
   def removeShuffle(shuffleId: Int, blocking: Boolean) {
+    // 向BlockManagerMasterEndpoint发送RemoveShuffle消息以删除Block
     val future = driverEndpoint.askWithRetry[Future[Seq[Boolean]]](RemoveShuffle(shuffleId))
     future.onFailure {
       case e: Exception =>
@@ -152,8 +214,11 @@ class BlockManagerMaster(
     }
   }
 
-  /** Remove all blocks belonging to the given broadcast. */
+  /** Remove all blocks belonging to the given broadcast.
+    * 移除属于给定Broadcast的所有数据块，第二个参数指定是否阻塞
+    **/
   def removeBroadcast(broadcastId: Long, removeFromMaster: Boolean, blocking: Boolean) {
+    // 向BlockManagerMasterEndpoint发送RemoveBroadcast消息以删除Block
     val future = driverEndpoint.askWithRetry[Future[Seq[Int]]](
       RemoveBroadcast(broadcastId, removeFromMaster))
     future.onFailure {
@@ -171,12 +236,17 @@ class BlockManagerMaster(
    * the block manager's id to two long values. The first value is the maximum
    * amount of memory allocated for the block manager, while the second is the
    * amount of remaining memory.
+    *
+    * 获取所有BlockManager的内存状态
    */
   def getMemoryStatus: Map[BlockManagerId, (Long, Long)] = {
+    // 向BlockManagerMasterEndpoiuntitled:Untitled-1nt发送GetMemoryStatus消息以获取
     driverEndpoint.askWithRetry[Map[BlockManagerId, (Long, Long)]](GetMemoryStatus)
   }
 
+  // 获取所有BlockManager的存储状态
   def getStorageStatus: Array[StorageStatus] = {
+    // 向BlockManagerMasterEndpoint发送GetStorageStatus消息以获取
     driverEndpoint.askWithRetry[Array[StorageStatus]](GetStorageStatus)
   }
 
@@ -187,15 +257,22 @@ class BlockManagerMaster(
    * If askSlaves is true, this invokes the master to query each block manager for the most
    * updated block statuses. This is useful when the master is not informed of the given block
    * by all block managers.
+    *
+    * 获取指定数据块的状态
    */
   def getBlockStatus(
       blockId: BlockId,
       askSlaves: Boolean = true): Map[BlockManagerId, BlockStatus] = {
+    // 创建GetBlockStatus消息
     val msg = GetBlockStatus(blockId, askSlaves)
     /*
      * To avoid potential deadlocks, the use of Futures is necessary, because the master endpoint
      * should not block on waiting for a block manager, which can in turn be waiting for the
      * master endpoint for a response to a prior message.
+     *
+     * BlockMasterEndpoint不能因BlockManager的处理过程而阻塞
+     *
+     * 向BlockManagerMasterEndpoint发送GetBlockStatus消息以获取
      */
     val response = driverEndpoint.
       askWithRetry[Map[BlockManagerId, Future[Option[BlockStatus]]]](msg)
@@ -223,35 +300,53 @@ class BlockManagerMaster(
    * If askSlaves is true, this invokes the master to query each block manager for the most
    * updated block statuses. This is useful when the master is not informed of the given block
    * by all block managers.
+    *
+    * 获取匹配的数据块；
+    * 第一个参数是一个过滤器，用于过滤BlockId
    */
   def getMatchingBlockIds(
       filter: BlockId => Boolean,
       askSlaves: Boolean): Seq[BlockId] = {
+    // 构造GetMatchingBlockIds消息
     val msg = GetMatchingBlockIds(filter, askSlaves)
+    // 向BlockManagerMasterEndpoint发送GetMatchingBlockIds消息以获取
     val future = driverEndpoint.askWithRetry[Future[Seq[BlockId]]](msg)
+    // 阻塞等待
     timeout.awaitResult(future)
   }
 
   /**
    * Find out if the executor has cached blocks. This method does not consider broadcast blocks,
    * since they are not reported the master.
+    *
+    * 判断指定的Executor是否缓存了数据块
    */
   def hasCachedBlocks(executorId: String): Boolean = {
+    // 向BlockManagerMasterEndpoint发送HasCachedBlocks消息以获取
     driverEndpoint.askWithRetry[Boolean](HasCachedBlocks(executorId))
   }
 
-  /** Stop the driver endpoint, called only on the Spark driver node */
+  /** Stop the driver endpoint, called only on the Spark driver node
+    *
+    * 停止当前BlockManagerMaster
+    **/
   def stop() {
+    // 只有在BlockManagerMasterEndpoint的RpcEndpointRef不为空，且是Driver的情况下才能停止
     if (driverEndpoint != null && isDriver) {
+      // 需要告知BlockManagerMaster停止的消息StopBlockManagerMaster
       tell(StopBlockManagerMaster)
+      // 将BlockManagerMasterEndpointRef置空
       driverEndpoint = null
       logInfo("BlockManagerMaster stopped")
     }
   }
 
-  /** Send a one-way message to the master endpoint, to which we expect it to reply with true. */
+  /** Send a one-way message to the master endpoint, to which we expect it to reply with true.
+    * 用于发送不需要回复的OneWayMessage消息给BlockManagerMasterEndpoint
+    **/
   private def tell(message: Any) {
     if (!driverEndpoint.askWithRetry[Boolean](message)) {
+      // 发送失败会抛出异常
       throw new SparkException("BlockManagerMasterEndpoint returned false, expected true.")
     }
   }

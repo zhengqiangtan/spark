@@ -37,7 +37,11 @@ import org.apache.spark.util.{ThreadUtils, Utils}
   * 例如，删除Block、获取Block状态、获取匹配的BlockId等。
   *
   * BlockManagerSlaveEndpoint用于接收BlockManagerMasterEndpoint的命令并执行相应的操作。
- */
+  *
+  * @param rpcEnv 所属的RpcEnv
+  * @param blockManager 所属对应的BlockManager
+  * @param mapOutputTracker MapOutputTracker实例，用于Map任务输出跟踪，后面会讲解
+  */
 private[storage]
 class BlockManagerSlaveEndpoint(
     override val rpcEnv: RpcEnv,
@@ -45,8 +49,11 @@ class BlockManagerSlaveEndpoint(
     mapOutputTracker: MapOutputTracker)
   extends ThreadSafeRpcEndpoint with Logging {
 
+  // 异步线程池
   private val asyncThreadPool =
     ThreadUtils.newDaemonCachedThreadPool("block-manager-slave-async-thread-pool")
+
+  // 隐式对象，包装了asyncThreadPool
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
 
   // Operations that involve removing blocks may be slow and should be done asynchronously
@@ -87,6 +94,7 @@ class BlockManagerSlaveEndpoint(
       context.reply(Utils.getThreadDump())
   }
 
+  // 用于异步处理消息
   private def doAsync[T](actionMessage: String, context: RpcCallContext)(body: => T) {
     // 创建Future
     val future = Future {
