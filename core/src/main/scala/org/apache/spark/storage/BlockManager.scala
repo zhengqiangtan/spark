@@ -98,6 +98,7 @@ private[spark] class BlockManager(
   }
 
   // Visible for testing
+  // 创建BlockInfoManager
   private[storage] val blockInfoManager = new BlockInfoManager
 
   // 创建用于执行Future的线程池，线程前缀为block-manager-future，线程池大小默认为128
@@ -115,11 +116,13 @@ private[spark] class BlockManager(
   // However, since we use this only for reporting and logging, what we actually want here is
   // the absolute maximum value that `maxMemory` can ever possibly reach. We may need
   // to revisit whether reporting this value as the "max" is intuitive to the user.
+  // 获取内存最大存储大小，堆内存 + 堆外内存
   private val maxMemory =
     memoryManager.maxOnHeapStorageMemory + memoryManager.maxOffHeapStorageMemory
 
   // Port used by the external shuffle service. In Yarn mode, this may be already be
   // set through the Hadoop configuration as the server is launched in the Yarn NM.
+  // 获取外部Shuffle服务的端口
   private val externalShuffleServicePort = {
     val tmpPort = Utils.getSparkOrYarnConfig(conf, "spark.shuffle.service.port", "7337").toInt
     if (tmpPort == 0) {
@@ -132,10 +135,12 @@ private[spark] class BlockManager(
     }
   }
 
+  // 当前BlockManager的BlockManagerId
   var blockManagerId: BlockManagerId = _
 
   // Address of the server that serves this executor's shuffle files. This is either an external
   // service, or just our own Executor's BlockManager.
+  // 用于标识提供Shuffle服务时的Shuffle服务ID
   private[spark] var shuffleServerId: BlockManagerId = _
 
   // Client to read other executors' shuffle files. This is either an external service, or just the
@@ -155,10 +160,11 @@ private[spark] class BlockManager(
   }
 
   // Max number of failures before this block manager refreshes the block locations from the driver
+  // 向Driver进行刷新数据块位置操作的最大错误次数
   private val maxFailuresBeforeLocationRefresh =
     conf.getInt("spark.block.failures.beforeLocationRefresh", 5)
 
-  // BlockManagerSlaveEndpoint
+  // 此BlockManager的BlockManagerSlaveEndpoint
   private val slaveEndpoint = rpcEnv.setupEndpoint(
     "BlockManagerEndpoint" + BlockManager.ID_GENERATOR.next,
     new BlockManagerSlaveEndpoint(rpcEnv, this, mapOutputTracker))

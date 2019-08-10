@@ -60,34 +60,48 @@ public class RetryingBlockFetcher {
     void createAndStart(String[] blockIds, BlockFetchingListener listener) throws IOException;
   }
 
-  /** Shared executor service used for waiting and retrying. */
+  /** Shared executor service used for waiting and retrying.
+   * 用于重试的线程池
+   **/
   private static final ExecutorService executorService = Executors.newCachedThreadPool(
     NettyUtils.createThreadFactory("Block Fetch Retry"));
 
   private static final Logger logger = LoggerFactory.getLogger(RetryingBlockFetcher.class);
 
-  /** Used to initiate new Block Fetches on our remaining blocks. */
+  /** Used to initiate new Block Fetches on our remaining blocks.
+   * 拉取启动器
+   **/
   private final BlockFetchStarter fetchStarter;
 
-  /** Parent listener which we delegate all successful or permanently failed block fetches to. */
+  /** Parent listener which we delegate all successful or permanently failed block fetches to.
+   * 用于记录外界传入的监听器
+   **/
   private final BlockFetchingListener listener;
 
-  /** Max number of times we are allowed to retry. */
+  /** Max number of times we are allowed to retry.
+   * 最大重试次数
+   **/
   private final int maxRetries;
 
-  /** Milliseconds to wait before each retry. */
+  /** Milliseconds to wait before each retry.
+   * 两次重试之间的时间间隔，由spark.模块名.io.retryWait决定
+   **/
   private final int retryWaitTime;
 
   // NOTE:
   // All of our non-final fields are synchronized under 'this' and should only be accessed/mutated
   // while inside a synchronized block.
-  /** Number of times we've attempted to retry so far. */
+  /** Number of times we've attempted to retry so far.
+   * 记录已经尝试拉取的次数
+   **/
   private int retryCount = 0;
 
   /**
    * Set of all block ids which have not been fetched successfully or with a non-IO Exception.
    * A retry involves requesting every outstanding block. Note that since this is a LinkedHashSet,
    * input ordering is preserved, so we always request blocks in the same order the user provided.
+   *
+   * 记录需要拉取的数据块的BlockId集合
    */
   private final LinkedHashSet<String> outstandingBlocksIds;
 
@@ -95,6 +109,8 @@ public class RetryingBlockFetcher {
    * The BlockFetchingListener that is active with our current BlockFetcher.
    * When we start a retry, we immediately replace this with a new Listener, which causes all any
    * old Listeners to ignore all further responses.
+   *
+   * 重试监听器
    */
   private RetryingBlockFetchListener currentListener;
 
@@ -103,12 +119,18 @@ public class RetryingBlockFetcher {
       BlockFetchStarter fetchStarter,
       String[] blockIds,
       BlockFetchingListener listener) {
+    // 记录拉取启动器
     this.fetchStarter = fetchStarter;
+    // 记录传入的BlockFetchingListener监听器
     this.listener = listener;
+    // 获取配置的最大重试次数
     this.maxRetries = conf.maxIORetries();
+    // 获取配置两次重试的间隔等待时间
     this.retryWaitTime = conf.ioRetryWaitTimeMs();
+    // 将需要拉取的数据块的BlockId全部放入outstandingBlocksIds保存
     this.outstandingBlocksIds = Sets.newLinkedHashSet();
     Collections.addAll(outstandingBlocksIds, blockIds);
+    // 创建新的监听器
     this.currentListener = new RetryingBlockFetchListener();
   }
 
@@ -117,6 +139,7 @@ public class RetryingBlockFetcher {
    * event of transient IOExceptions.
    */
   public void start() {
+    // 拉取所有的待拉取数据块
     fetchAllOutstanding();
   }
 
@@ -126,14 +149,17 @@ public class RetryingBlockFetcher {
    */
   private void fetchAllOutstanding() {
     // Start by retrieving our shared state within a synchronized block.
-    //
+    // 还需要被拉取的数据块的BlockId
     String[] blockIdsToFetch;
     // 重试次数
     int numRetries;
     RetryingBlockFetchListener myListener;
     synchronized (this) {
+      // 记录还需要拉取的数据块的BlockId
       blockIdsToFetch = outstandingBlocksIds.toArray(new String[outstandingBlocksIds.size()]);
+      // 记录重试次数
       numRetries = retryCount;
+      // 记录监听器
       myListener = currentListener;
     }
 
@@ -145,10 +171,15 @@ public class RetryingBlockFetcher {
       logger.error(String.format("Exception while beginning fetch of %s outstanding blocks %s",
         blockIdsToFetch.length, numRetries > 0 ? "(after " + numRetries + " retries)" : ""), e);
 
-      if (shouldRetry(e)) { // 判断是否需要重试
+      // 发生异常，判断是否还可以重试
+      if (shouldRetry(e)) { // 还可以重试
         // 再次重试，此处会向线程池提交一个新的任务执行fetchAllOutstanding()方法
         initiateRetry();
       } else {
+        /**
+         * 没有重试次数了，通知listener产生的异常
+         * 注意，这里的bid是还没有拉取的数据块的BlockId
+         */
         for (String bid : blockIdsToFetch) {
           listener.onBlockFetchFailure(bid, e);
         }
@@ -159,6 +190,8 @@ public class RetryingBlockFetcher {
   /**
    * Lightweight method which initiates a retry in a different thread. The retry will involve
    * calling fetchAllOutstanding() after a configured wait time.
+   *
+   * 开启一次新的重试
    */
   private synchronized void initiateRetry() {
     // 重试次数自增
@@ -174,6 +207,7 @@ public class RetryingBlockFetcher {
       @Override
       public void run() {
         Uninterruptibles.sleepUninterruptibly(retryWaitTime, TimeUnit.MILLISECONDS);
+        // 调用fetchAllOutstanding()方法再次尝试拉取
         fetchAllOutstanding();
       }
     });
@@ -184,7 +218,7 @@ public class RetryingBlockFetcher {
    * the exception was an IOException and we haven't retried 'maxRetries' times already.
    */
   private synchronized boolean shouldRetry(Throwable e) {
-    // IOException
+    // IOException才重试
     boolean isIOException = e instanceof IOException
       || (e.getCause() != null && e.getCause() instanceof IOException);
     // 还有剩余重试次数
@@ -198,20 +232,32 @@ public class RetryingBlockFetcher {
    * indicating that any responses from non-current Listeners should be ignored.
    */
   private class RetryingBlockFetchListener implements BlockFetchingListener {
+
+    // 拉取数据成功的回调
     @Override
     public void onBlockFetchSuccess(String blockId, ManagedBuffer data) {
       // We will only forward this success message to our parent listener if this block request is
       // outstanding and we are still the active listener.
+      // 用于指定是否需要将成功获取的数据转发给listener
       boolean shouldForwardSuccess = false;
       synchronized (RetryingBlockFetcher.this) {
+        /**
+         * 1. 判断监听器是否被改变，每次重新拉取都会重置currentListener为新的RetryingBlockFetchListener对象；
+         *    因此如果currentListener与当前RetryingBlockFetchListener对象不一致，说明这次的拉取已经过期了。
+         * 2. 拉取的数据块是否是需要的；outstandingBlocksIds会在每次成功拉取后将当次拉取的数据库的BlockId移除，
+         *    防止重复拉取；如果拉取的数据块的BlockId不被outstandingBlocksIds包含，说明重复拉取了。
+         */
         if (this == currentListener && outstandingBlocksIds.contains(blockId)) {
+          // 满足条件，先把本次拉取的数据块的BlockId记录从outstandingBlocksIds移除
           outstandingBlocksIds.remove(blockId);
+          // 标记本次拉取的数据可以转发给listener
           shouldForwardSuccess = true;
         }
       }
 
       // Now actually invoke the parent listener, outside of the synchronized block.
       if (shouldForwardSuccess) {
+        // 将拉取的数据转发给listener
         listener.onBlockFetchSuccess(blockId, data);
       }
     }
@@ -220,15 +266,21 @@ public class RetryingBlockFetcher {
     public void onBlockFetchFailure(String blockId, Throwable exception) {
       // We will only forward this failure to our parent listener if this block request is
       // outstanding, we are still the active listener, AND we cannot retry the fetch.
+      // 标记是否需要转发异常
       boolean shouldForwardFailure = false;
       synchronized (RetryingBlockFetcher.this) {
+        // 该判断与上面的onBlockFetchSuccess()方法中的判断是一致的
         if (this == currentListener && outstandingBlocksIds.contains(blockId)) {
+          // 判断是否还需要重试，只有在IOException和还有剩余重试次数时才重试
           if (shouldRetry(exception)) {
+            // 准备重试
             initiateRetry();
           } else {
             logger.error(String.format("Failed to fetch block %s, and will not retry (%s retries)",
               blockId, retryCount), exception);
+            // 没有重试次数或者发生了其他异常，将本次拉取的数据块的BlockId记录从outstandingBlocksIds移除
             outstandingBlocksIds.remove(blockId);
+            // 标记本次产生的异常可以转发给listener
             shouldForwardFailure = true;
           }
         }
@@ -236,6 +288,7 @@ public class RetryingBlockFetcher {
 
       // Now actually invoke the parent listener, outside of the synchronized block.
       if (shouldForwardFailure) {
+        // 将产生的异常转发给listener
         listener.onBlockFetchFailure(blockId, exception);
       }
     }

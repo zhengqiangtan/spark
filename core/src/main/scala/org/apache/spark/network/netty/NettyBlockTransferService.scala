@@ -155,7 +155,16 @@ private[spark] class NettyBlockTransferService(
 
   override def port: Int = server.getPort
 
-  // 上传Block
+  /**
+    * 上传Block
+    * @param hostname 上传目的节点的主机地址
+    * @param port 上传目的节点的端口
+    * @param execId 上传目的节点的Executor ID
+    * @param blockId 上传数据块的BlockId
+    * @param blockData 上传数据块的数据
+    * @param level 上传数据块的存储级别
+    * @return
+    */
   override def uploadBlock(
       hostname: String,
       port: Int,

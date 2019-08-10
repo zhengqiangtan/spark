@@ -83,14 +83,16 @@ public class OneForOneBlockFetcher {
     this.chunkCallback = new ChunkCallback();
   }
 
-  /** Callback invoked on receipt of each chunk. We equate a single chunk to a single block. */
+  /** Callback invoked on receipt of each chunk. We equate a single chunk to a single block.
+   * 用于拉取数据后的回调
+   **/
   private class ChunkCallback implements ChunkReceivedCallback {
 
     // 拉取单个的块成功
     @Override
     public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
       // On receipt of a chunk, pass it upwards as a block.
-      // 回调监听器
+      // 会通知给监听器的方法，从这里可以得知，服务端返回的数据是按照BlockId的顺序进行排列的
       listener.onBlockFetchSuccess(blockIds[chunkIndex], buffer);
     }
 
