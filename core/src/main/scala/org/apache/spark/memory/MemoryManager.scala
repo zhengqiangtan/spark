@@ -37,9 +37,7 @@ import org.apache.spark.unsafe.memory.MemoryAllocator
   * 内存管理器。负责对单个节点上内存的分配与回收。有两种：
   * - StaticMemoryManager：静态内存管理器。
   * - UnifiedMemoryManager：统一内存管理器。
- *
-  * @param conf
-  * @param numCores CPU内核数
+  * @param numCores CPU内核数，该值会影响计算的内存页大小
   * @param onHeapStorageMemory 用于存储的堆内存大小。
   * @param onHeapExecutionMemory 用于执行计算的堆内存大小。
   */
@@ -64,19 +62,25 @@ private[spark] abstract class MemoryManager(
   @GuardedBy("this")
   protected val offHeapExecutionMemoryPool = new ExecutionMemoryPool(this, MemoryMode.OFF_HEAP)
 
+  // 对堆内的执行内存池和存储内存池进行容量初始化
   onHeapStorageMemoryPool.incrementPoolSize(onHeapStorageMemory)
   onHeapExecutionMemoryPool.incrementPoolSize(onHeapExecutionMemory)
 
   // 堆外内存的最大值。可以通过spark.memory.offHeap.size属性指定，默认为0。
   protected[this] val maxOffHeapMemory = conf.getSizeAsBytes("spark.memory.offHeap.size", 0)
   /**
-    * 用于存储的堆外内存大小。
-    * 可以通过spark.memory.storageFraction属性（默认为0.5）修改存储占用堆外内存的占比来影响offHeapStorageMemory的大小。
+    * 用于存储的堆外内存初始大小。
+    * 先通过spark.memory.storageFraction参数确定用于堆外内存中用于存储的占比；
+    * 默认值为0.5，即表示offHeapStorageMemory和offHeapExecutionMemoryPool各占总堆外内存的50%；
+    * 然后根据将这个比例与总的堆外内存大小相乘，即可得到用于存储的堆外内存初始大小。
+    * 需要注意的是，由于StaticMemoryManager不可将堆外内存用于存储，因此该值对StaticMemoryManager无效。
     */
   protected[this] val offHeapStorageMemory =
     (maxOffHeapMemory * conf.getDouble("spark.memory.storageFraction", 0.5)).toLong
 
+  // 对堆外的执行内存池和存储内存池进行容量初始化
   offHeapExecutionMemoryPool.incrementPoolSize(maxOffHeapMemory - offHeapStorageMemory)
+  // 需要注意的是，由于StaticMemoryManager不可将堆外内存用于存储，因此该值对StaticMemoryManager无效。
   offHeapStorageMemoryPool.incrementPoolSize(offHeapStorageMemory)
 
   /**
@@ -171,6 +175,7 @@ private[spark] abstract class MemoryManager(
    * @return the number of bytes freed.
    */
   private[memory] def releaseAllExecutionMemoryForTask(taskAttemptId: Long): Long = synchronized {
+    // 释放占有的堆内执行内存，并释放占用的堆外执行内存
     onHeapExecutionMemoryPool.releaseAllMemoryForTask(taskAttemptId) +
       offHeapExecutionMemoryPool.releaseAllMemoryForTask(taskAttemptId)
   }
@@ -268,15 +273,24 @@ private[spark] abstract class MemoryManager(
   val pageSizeBytes: Long = {
     val minPageSize = 1L * 1024 * 1024   // 1MB
     val maxPageSize = 64L * minPageSize  // 64MB
+    // 获取CPU核数，如果指定了numCores就使用numCores，否则使用机器的CPU可用核数
     val cores = if (numCores > 0) numCores else Runtime.getRuntime.availableProcessors()
     // Because of rounding to next power of 2, we may have safetyFactor as 8 in worst case
+    // 安全因子
     val safetyFactor = 16
+    // 获取对应内存模式下可用的最大Tungsten内存
     val maxTungstenMemory: Long = tungstenMemoryMode match {
       case MemoryMode.ON_HEAP => onHeapExecutionMemoryPool.poolSize
       case MemoryMode.OFF_HEAP => offHeapExecutionMemoryPool.poolSize
     }
+    /**
+      * 计算页大小。传入的参数是maxTungstenMemory / cores / safetyFactor，
+      * 最终得到的页大小是小于maxTungstenMemory / cores / safetyFactor的最大的2的次方值。
+      */
     val size = ByteArrayMethods.nextPowerOf2(maxTungstenMemory / cores / safetyFactor)
+    // 页的大小需要在 1MB ~ 64MB 之间
     val default = math.min(maxPageSize, math.max(minPageSize, size))
+    // 尝试从spark.buffer.pageSize参数获取，如果没有指定就使用上面计算的默认值
     conf.getSizeAsBytes("spark.buffer.pageSize", default)
   }
 

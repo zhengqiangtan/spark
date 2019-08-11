@@ -39,6 +39,7 @@ public class MemoryLocation {
    */
   long offset;
 
+  // 构造方法
   public MemoryLocation(@Nullable Object obj, long offset) {
     this.obj = obj;
     this.offset = offset;
@@ -48,15 +49,18 @@ public class MemoryLocation {
     this(null, 0);
   }
 
+  // 设置新的obj和offset
   public void setObjAndOffset(Object newObj, long newOffset) {
     this.obj = newObj;
     this.offset = newOffset;
   }
 
+  // 获取obj
   public final Object getBaseObject() {
     return obj;
   }
 
+  // 获取offset
   public final long getBaseOffset() {
     return offset;
   }

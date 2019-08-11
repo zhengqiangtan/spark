@@ -59,6 +59,7 @@ private[memory] class StorageMemoryPool(
 
   // 当前StorageMemoryPool所关联的MemoryStore。
   private var _memoryStore: MemoryStore = _
+
   // 返回了_memoryStore属性引用的MemoryStore
   def memoryStore: MemoryStore = {
     if (_memoryStore == null) {
@@ -94,28 +95,35 @@ private[memory] class StorageMemoryPool(
    * Acquire N bytes of storage memory for the given block, evicting existing ones if necessary.
    *
    * @param blockId the ID of the block we are acquiring storage memory for
+    *                申请内存的BlockId
    * @param numBytesToAcquire the size of this block
+    *                          申请的内存大小
    * @param numBytesToFree the amount of space to be freed through evicting blocks
+    *                       本次申请需要额外空出来的内存大小
    * @return whether all N bytes were successfully granted.
+    *         所需要的内存是否申请成功了
    */
   def acquireMemory(
-      blockId: BlockId, // 需要分配内存的BlockId
-      numBytesToAcquire: Long, // 需要分配的大小
-      // 空闲大小
+      blockId: BlockId,
+      numBytesToAcquire: Long,
       numBytesToFree: Long): Boolean = lock.synchronized { // 加锁
     // 检查参数
     assert(numBytesToAcquire >= 0)
     assert(numBytesToFree >= 0)
+    // 已用内存大小需要小于或等于内存池总大小
     assert(memoryUsed <= poolSize)
+
+    // 判断是否需要腾出额外的内存大小
     if (numBytesToFree > 0) { // 腾出numBytesToFree属性指定大小的空间
+      // 使用MemoryStore的evictBlocksToFreeSpace()方法进行腾出
       memoryStore.evictBlocksToFreeSpace(Some(blockId), numBytesToFree, memoryMode)
     }
     // NOTE: If the memory store evicts blocks, then those evictions will synchronously call
     // back into this StorageMemoryPool in order to free memory. Therefore, these variables
     // should have been updated.
-    // 判断内存是否充足
+    // 判断可用内存是否充足
     val enoughMemory = numBytesToAcquire <= memoryFree
-    if (enoughMemory) { // 增加已经使用的内存大小
+    if (enoughMemory) { // 可用内存充足，增加已经使用的内存大小
       _memoryUsed += numBytesToAcquire
     }
     // 返回是否成功获得了用于存储Block的内存空间
@@ -149,11 +157,11 @@ private[memory] class StorageMemoryPool(
    * @return number of bytes to be removed from the pool's capacity.
    */
   def freeSpaceToShrinkPool(spaceToFree: Long): Long = lock.synchronized {
-    // 计算释放的大小和空闲大小的最小值
+    // 计算当前可释放的最大内存大小
     val spaceFreedByReleasingUnusedMemory = math.min(spaceToFree, memoryFree)
-    // 计算可释放的内存是否足够
+    // 计算可释放的内存是否满足要求释放的大小
     val remainingSpaceToFree = spaceToFree - spaceFreedByReleasingUnusedMemory
-    if (remainingSpaceToFree > 0) { // 如果可释放的内存不够
+    if (remainingSpaceToFree > 0) { // 如果可释放的内存不满足要求释放的大小
       // If reclaiming free memory did not adequately shrink the pool, begin evicting blocks:
       // 使用evictBlocksToFreeSpace()方法尝试腾出一些内存
       val spaceFreedByEviction =

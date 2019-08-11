@@ -109,7 +109,11 @@ private[spark] class BlockManager(
   // 创建MemoryStore
   private[spark] val memoryStore =
     new MemoryStore(conf, blockInfoManager, serializerManager, memoryManager, this)
+
+  // 创建DiskStore
   private[spark] val diskStore = new DiskStore(conf, diskBlockManager)
+
+  // 将MemoryStore设置给MemoryManager
   memoryManager.setMemoryStore(memoryStore)
 
   // Note: depending on the memory manager, `maxMemory` may actually vary over time.

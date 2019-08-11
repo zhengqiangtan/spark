@@ -28,15 +28,16 @@ import org.apache.spark.unsafe.Platform;
 /**
  * A simple {@link MemoryAllocator} that can allocate up to 16GB using a JVM long primitive array.
  *
- * Tungsten在堆内存模式下使用的内存分配器，与onHeapExecution MemoryPool配合使用。
+ * Tungsten在堆内存模式下使用的内存分配器，与onHeapExecutionMemoryPool配合使用。
  */
 public class HeapMemoryAllocator implements MemoryAllocator {
 
-  // 关于MemoryBlock的弱引用[1]的缓冲池，用于Page页（即Memory Block）的分配。
+  // 关于MemoryBlock的弱引用的缓冲池，用于Page页（即MemoryBlock）的分配。
   @GuardedBy("this")
   private final Map<Long, LinkedList<WeakReference<MemoryBlock>>> bufferPoolsBySize =
     new HashMap<>();
 
+  // 池化阈值，只有在池化的MemoryBlock大于该值时，才需要被池化
   private static final int POOLING_THRESHOLD_BYTES = 1024 * 1024;
 
   /**
@@ -57,15 +58,19 @@ public class HeapMemoryAllocator implements MemoryAllocator {
   public MemoryBlock allocate(long size) throws OutOfMemoryError {
     if (shouldPool(size)) { // 指定大小（size）的MemoryBlock需要采用池化机制
       synchronized (this) {
-        // 从bufferPoolsBySize的弱引用中获取指定大小的MemoryBlock
+        // 从bufferPoolsBySize的弱引用中获取指定大小的MemoryBlock链表
         final LinkedList<WeakReference<MemoryBlock>> pool = bufferPoolsBySize.get(size);
+        // 池链不为空
         if (pool != null) {
+          // 当池链中还存在MemoryBlock时
           while (!pool.isEmpty()) {
+            // 取出池链头的MemoryBlock
             final WeakReference<MemoryBlock> blockReference = pool.pop();
             final MemoryBlock memory = blockReference.get();
-            if (memory != null) {
+            if (memory != null) { // 取出的MemoryBlock不为空
+              // MemoryBlock的大小需要与分配的大小相同
               assert (memory.size() == size);
-              // 从MemoryBlock的缓存中获取指定大小的MemoryBlock
+              // 从MemoryBlock的缓存中获取指定大小的MemoryBlock并返回
               return memory;
             }
           }
@@ -75,10 +80,23 @@ public class HeapMemoryAllocator implements MemoryAllocator {
       }
     }
 
-    // 指定大小的MemoryBlock不需要采用池化机制或者bufferPoolsBySize中没有指定大小的MemoryBlock
+    /**
+     * 走到此处，说明满足以下任意一点：
+     * 1. 指定大小的MemoryBlock不需要采用池化机制。
+     * 2. bufferPoolsBySize中没有指定大小的MemoryBlock。
+     *
+     * MemoryBlock中以Long类型数组装载数据，所以需要对申请的大小进行转换，
+     * 由于申请的是字节数，因此先为其多分配7个字节，避免最终分配的字节数不够，
+     * 除以8是按照Long类型由8个字节组成来计算的。
+     *
+     * 例如：申请字节数为50，理想情况应该分配56字节，即7个Long型数据。
+     * 如果直接除以8，会得到6，即6个Long型数据，导致只会分配48个字节，
+     * 但先加7后再除以8，即 (50 + 7) / 8 = 7个Long型数据，满足分配要求。
+     */
     long[] array = new long[(int) ((size + 7) / 8)];
     // 创建MemoryBlock并返回
     MemoryBlock memory = new MemoryBlock(array, Platform.LONG_ARRAY_OFFSET, size);
+    // Debug相关
     if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
       memory.fill(MemoryAllocator.MEMORY_DEBUG_FILL_CLEAN_VALUE);
     }
