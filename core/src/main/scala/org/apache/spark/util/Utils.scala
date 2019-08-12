@@ -770,24 +770,32 @@ private[spark] object Utils extends Logging {
    * logic of locating the local directories according to deployment mode.
    */
   def getConfiguredLocalDirs(conf: SparkConf): Array[String] = {
+    // 外部Shuffle服务是否开启
     val shuffleServiceEnabled = conf.getBoolean("spark.shuffle.service.enabled", false)
-    if (isRunningInYarnContainer(conf)) {
+    if (isRunningInYarnContainer(conf)) { // 在YARN容器中运行
       // If we are in yarn mode, systems can have different disk layouts so we must set it
       // to what Yarn on this system said was available. Note this assumes that Yarn has
       // created the directories already, and that they are secured so that only the
       // user has access to them.
       getYarnLocalDirs(conf).split(",")
-    } else if (conf.getenv("SPARK_EXECUTOR_DIRS") != null) {
+    } else if (conf.getenv("SPARK_EXECUTOR_DIRS") != null) { // 非YARN容器中运行，且配置了SPARK_EXECUTOR_DIRS
+      // 通过SPARK_EXECUTOR_DIRS配置来获取
       conf.getenv("SPARK_EXECUTOR_DIRS").split(File.pathSeparator)
-    } else if (conf.getenv("SPARK_LOCAL_DIRS") != null) {
+    } else if (conf.getenv("SPARK_LOCAL_DIRS") != null) {  // 非YARN容器中运行，且配置了SPARK_LOCAL_DIRS
+      // 通过SPARK_LOCAL_DIRS配置来获取
       conf.getenv("SPARK_LOCAL_DIRS").split(",")
-    } else if (conf.getenv("MESOS_DIRECTORY") != null && !shuffleServiceEnabled) {
+    } else if (conf.getenv("MESOS_DIRECTORY") != null && !shuffleServiceEnabled) { // 非YARN容器中运行，但配置了Mesos的MESOS_DIRECTORY目录，且未开启外部Shuffle服务
       // Mesos already creates a directory per Mesos task. Spark should use that directory
       // instead so all temporary files are automatically cleaned up when the Mesos task ends.
       // Note that we don't want this if the shuffle service is enabled because we want to
       // continue to serve shuffle files after the executors that wrote them have already exited.
+      // 获取Mesos的MESOS_DIRECTORY目录
       Array(conf.getenv("MESOS_DIRECTORY"))
-    } else {
+    } else { // 其他情况
+      /**
+        * 非YARN容器中运行，配置了Mesos的MESOS_DIRECTORY目录，但开启了外部Shuffle服务
+        * 此时需要记录日志，由于Mesos不支持提供沙盒环境，因此不支持外部Shuffle服务
+        */
       if (conf.getenv("MESOS_DIRECTORY") != null && shuffleServiceEnabled) {
         logInfo("MESOS_DIRECTORY available but not using provided Mesos sandbox because " +
           "spark.shuffle.service.enabled is enabled.")
@@ -795,6 +803,7 @@ private[spark] object Utils extends Logging {
       // In non-Yarn mode (or for the driver in yarn-client mode), we cannot trust the user
       // configuration to point to a secure directory. So create a subdirectory with restricted
       // permissions under each listed directory.
+      // 此时从spark.local.dir、java.io.tmpdir中尝试读取
       conf.get("spark.local.dir", System.getProperty("java.io.tmpdir")).split(",")
     }
   }

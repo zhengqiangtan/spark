@@ -80,9 +80,9 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
     // Figure out which local directory it hashes to, and which subdirectory in that
     // 获取文件名的非负哈希值
     val hash = Utils.nonNegativeHash(filename)
-    // 按照取余获取一级目录
+    // 按照Hash取余获取一级目录
     val dirId = hash % localDirs.length
-    // 按照取余获取二级目录
+    // 按照Hash取余获取二级目录
     val subDirId = (hash / localDirs.length) % subDirsPerLocalDir
 
     // Create the subdirectory if it doesn't already exist
@@ -124,7 +124,7 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
   def getAllFiles(): Seq[File] = {
     // Get all the files inside the array of array of directories
     // 遍历subDirs中所有的目录
-    subDirs.flatMap { dir =>
+    subDirs.flatMap { dir => // 一层目录遍历
       dir.synchronized { // 加锁
         // Copy the content of dir because it may be modified in other threads
         // 加锁后克隆一份，避免线程安全问题
@@ -176,10 +176,13 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
    * be deleted on JVM exit when using the external shuffle service.
    */
   private def createLocalDirs(conf: SparkConf): Array[File] = {
+    // 获取一级目录的路径，并进行flatMap
     Utils.getConfiguredLocalDirs(conf).flatMap { rootDir =>
       try {
+        // 在每个一级目录下都创建名为"blockmgr-UUID字符串"的子目录
         val localDir = Utils.createDirectory(rootDir, "blockmgr")
         logInfo(s"Created local directory at $localDir")
+        // 返回创建的目录
         Some(localDir)
       } catch {
         case e: IOException =>
@@ -191,8 +194,10 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
 
   private def addShutdownHook(): AnyRef = {
     logDebug("Adding shutdown hook") // force eager creation of logger
+    // 虚拟机关闭钩子
     ShutdownHookManager.addShutdownHook(ShutdownHookManager.TEMP_DIR_SHUTDOWN_PRIORITY + 1) { () =>
       logInfo("Shutdown hook called")
+      // 在虚拟机关闭时也关闭DiskBlockManager
       DiskBlockManager.this.doStop()
     }
   }

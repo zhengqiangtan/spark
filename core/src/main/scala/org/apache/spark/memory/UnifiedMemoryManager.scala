@@ -40,26 +40,32 @@ import org.apache.spark.storage.BlockId
  * according to their respective storage levels.
   *
   * UnifiedMemoryManager在MemoryManager的内存模型之上，
-  * 将计算内存和存储内存之间的边界修改为“软”边界，即任何一方可以向另一方借用空闲的内存。
- *
- * @param onHeapStorageRegionSize Size of the storage region, in bytes.
- *                          This region is not statically reserved; execution can borrow from
- *                          it if necessary. Cached blocks can be evicted only if actual
- *                          storage memory usage exceeds this region.
- */
+  * 将执行内存和存储内存之间的边界修改为“软”边界，即任何一方可以向另一方借用空闲的内存。
+  *
+  * @param maxHeapMemory 最大堆内存。大小为系统可用内存与spark.memory.fraction属性值（默认为0.6）的乘积。
+  * @param onHeapStorageRegionSize Size of the storage region, in bytes.
+  *                          This region is not statically reserved; execution can borrow from
+  *                          it if necessary. Cached blocks can be evicted only if actual
+  *                          storage memory usage exceeds this region.
+  *                          用于存储的堆内存大小。
+  * @param numCores CPU内核数，该值会影响计算的内存页大小
+  */
 private[spark] class UnifiedMemoryManager private[memory] (
     conf: SparkConf,
-    val maxHeapMemory: Long, // 最大堆内存。大小为系统可用内存与spark.memory.fraction属性值（默认为0.6）的乘积。
-    onHeapStorageRegionSize: Long, // 用于存储的堆内存大小。
-    numCores: Int) // CPU内核数。
+    val maxHeapMemory: Long,
+    onHeapStorageRegionSize: Long,
+    numCores: Int)
   extends MemoryManager(
     conf,
     numCores,
     onHeapStorageRegionSize,
     maxHeapMemory - onHeapStorageRegionSize) {
 
+  // 检查不可变性
   private def assertInvariants(): Unit = {
+    // 堆内存用于执行和存储的总内存大小不能发生改变
     assert(onHeapExecutionMemoryPool.poolSize + onHeapStorageMemoryPool.poolSize == maxHeapMemory)
+    // 堆外内存用于执行和存储的总内存大小不能发生改变
     assert(
       offHeapExecutionMemoryPool.poolSize + offHeapStorageMemoryPool.poolSize == maxOffHeapMemory)
   }
@@ -93,7 +99,9 @@ private[spark] class UnifiedMemoryManager private[memory] (
       numBytes: Long,
       taskAttemptId: Long,
       memoryMode: MemoryMode): Long = synchronized {
+    // 检查不可变性
     assertInvariants()
+    // 检查申请的内存大小
     assert(numBytes >= 0)
     /**
       * 根据内存模式获取UnifiedMemoryManager中管理的堆上或堆外的
@@ -101,11 +109,13 @@ private[spark] class UnifiedMemoryManager private[memory] (
       * 存储区域大小（storageRegionSize）、内存最大值（maxMemory）。
       */
     val (executionPool, storagePool, storageRegionSize, maxMemory) = memoryMode match {
+        // 堆内存
       case MemoryMode.ON_HEAP => (
         onHeapExecutionMemoryPool,
         onHeapStorageMemoryPool,
         onHeapStorageRegionSize,
         maxHeapMemory)
+        // 堆外内存
       case MemoryMode.OFF_HEAP => (
         offHeapExecutionMemoryPool,
         offHeapStorageMemoryPool,
@@ -132,14 +142,19 @@ private[spark] class UnifiedMemoryManager private[memory] (
         // storage. We can reclaim any free memory from the storage pool. If the storage pool
         // has grown to become larger than `storageRegionSize`, we can evict blocks and reclaim
         // the memory that storage has borrowed from execution.
+        // 可从存储内存池借用的内存大小
         val memoryReclaimableFromStorage = math.max(
           storagePool.memoryFree,
           storagePool.poolSize - storageRegionSize)
+        // 大于0，说明可以从存储区域借用内存
         if (memoryReclaimableFromStorage > 0) {
           // Only reclaim as much space as is necessary and available:
+          // 仅借用必要的满足需求的内存大小
           val spaceToReclaim = storagePool.freeSpaceToShrinkPool(
             math.min(extraMemoryNeeded, memoryReclaimableFromStorage))
+          // 将借用的内存大小从存储内存池缩减
           storagePool.decrementPoolSize(spaceToReclaim)
+          // 将借用的内存大小添加到执行内存池
           executionPool.incrementPoolSize(spaceToReclaim)
         }
       }
@@ -178,9 +193,11 @@ private[spark] class UnifiedMemoryManager private[memory] (
       blockId: BlockId,
       numBytes: Long,
       memoryMode: MemoryMode): Boolean = synchronized { // 加锁
+    // 检查不可变性
     assertInvariants()
+    // 检查申请的内存大小
     assert(numBytes >= 0)
-    // 根据内存模式获取计算内存池、存储内存池和可以常用语存储的最大空间
+    // 根据内存模式获取执行内存池、存储内存池和可以用于存储的最大空间
     val (executionPool, storagePool, maxMemory) = memoryMode match {
       case MemoryMode.ON_HEAP => ( // 堆内存
         onHeapExecutionMemoryPool,
@@ -191,6 +208,7 @@ private[spark] class UnifiedMemoryManager private[memory] (
         offHeapStorageMemoryPool,
         maxOffHeapMemory)
     }
+
     // 如果申请的用于存储的内存大于可用于存储的（经过协调之后的）最大空间，则返回false，表示获取失败
     if (numBytes > maxMemory) {
       // Fail fast if the block simply won't fit
@@ -198,13 +216,14 @@ private[spark] class UnifiedMemoryManager private[memory] (
         s"memory limit ($maxMemory bytes)")
       return false
     }
-    // 如果申请的用于存储的内存大于存储内存池的可用空间，则需要去计算内存池中借用空间
+
+    // 如果申请的用于存储的内存大于存储内存池的可用空间，则需要去执行内存池中收回之前借出的空间
     if (numBytes > storagePool.memoryFree) {
       // There is not enough free memory in the storage pool, so try to borrow free memory from
       // the execution pool.
-      // 计算从计算内存池中借用的空间
+      // 计算从执行内存池中借来的空间
       val memoryBorrowedFromExecution = Math.min(executionPool.memoryFree, numBytes)
-      // 从计算内存池中减去借走的空间
+      // 从执行内存池中减去借走的空间
       executionPool.decrementPoolSize(memoryBorrowedFromExecution)
       // 将借来的空间加到存储内存池中
       storagePool.incrementPoolSize(memoryBorrowedFromExecution)
@@ -231,10 +250,12 @@ object UnifiedMemoryManager {
   private val RESERVED_SYSTEM_MEMORY_BYTES = 300 * 1024 * 1024
 
   def apply(conf: SparkConf, numCores: Int): UnifiedMemoryManager = {
+    // 获取可用的最大堆内存
     val maxMemory = getMaxMemory(conf)
     new UnifiedMemoryManager(
       conf,
       maxHeapMemory = maxMemory,
+      // 用于存储的堆内存大小，默认为 可用的最大堆内存 * 0.5
       onHeapStorageRegionSize =
         (maxMemory * conf.getDouble("spark.memory.storageFraction", 0.5)).toLong,
       numCores = numCores)
@@ -242,28 +263,47 @@ object UnifiedMemoryManager {
 
   /**
    * Return the total amount of memory shared between execution and storage, in bytes.
+    * 获取统一内存管理器可用的最大内存
    */
   private def getMaxMemory(conf: SparkConf): Long = {
+    // 系统可用的最大内存，通过spark.testing.memory配置，未配置的话则取运行时环境的最大内存
     val systemMemory = conf.getLong("spark.testing.memory", Runtime.getRuntime.maxMemory)
+    /**
+      * 获取系统保留内存大小，通过spark.testing.reservedMemory配置获取，
+      * 如果没有指定，判断是否配置了spark.testing，如果配置了则为0，否则默认为300 * 1024 * 1024，即300MB
+      */
     val reservedMemory = conf.getLong("spark.testing.reservedMemory",
       if (conf.contains("spark.testing")) 0 else RESERVED_SYSTEM_MEMORY_BYTES)
+
+    // 最小的系统内存阈值，默认为450MB
     val minSystemMemory = (reservedMemory * 1.5).ceil.toLong
+
+    // 检查系统可用的最大内存是否小于最小系统内存阈值，如果小于则抛出异常
     if (systemMemory < minSystemMemory) {
       throw new IllegalArgumentException(s"System memory $systemMemory must " +
         s"be at least $minSystemMemory. Please increase heap size using the --driver-memory " +
         s"option or spark.driver.memory in Spark configuration.")
     }
     // SPARK-12759 Check executor memory to fail fast if memory is insufficient
+    // 判断是否有spark.executor.memory配置
     if (conf.contains("spark.executor.memory")) {
+      // 获取spark.executor.memory配置，即Execution使用的内存大小
       val executorMemory = conf.getSizeAsBytes("spark.executor.memory")
+      // 判断Execution使用的内存大小是否小于最小系统内存阈值，如果小于则抛出异常
       if (executorMemory < minSystemMemory) {
         throw new IllegalArgumentException(s"Executor memory $executorMemory must be at least " +
           s"$minSystemMemory. Please increase executor memory using the " +
           s"--executor-memory option or spark.executor.memory in Spark configuration.")
       }
     }
+
+    // 可用内存 = 系统可用的最大内存 - 系统保留内存
     val usableMemory = systemMemory - reservedMemory
+
+    // 可用内存占比
     val memoryFraction = conf.getDouble("spark.memory.fraction", 0.6)
+
+    // 最终统一内存管理器的可用内存大小 = 可用内存 * 可用内存占比
     (usableMemory * memoryFraction).toLong
   }
 }

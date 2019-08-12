@@ -40,7 +40,7 @@ import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStrea
 // 内存中的Block抽象为特质MemoryEntry
 private sealed trait MemoryEntry[T] {
   def size: Long // 当前Block的大小
-  def memoryMode: MemoryMode // 当前Block的存储的内存模型
+  def memoryMode: MemoryMode // 当前Block的存储的内存类型
   def classTag: ClassTag[T] // 当前Block的类型标记
 }
 
@@ -52,7 +52,7 @@ private case class DeserializedMemoryEntry[T](
   val memoryMode: MemoryMode = MemoryMode.ON_HEAP
 }
 
-// SerializedMemoryEntry表示序列化后的MemoryEntry
+// 表示序列化后的MemoryEntry
 private case class SerializedMemoryEntry[T](
     buffer: ChunkedByteBuffer,
     memoryMode: MemoryMode,
@@ -70,8 +70,15 @@ private[storage] trait BlockEvictionHandler {
    * The caller of this method must hold a write lock on the block before calling this method.
    * This method does not release the write lock.
    *
-   * @return the block's new effective StorageLevel.
-   */
+   * @return
+    *
+    * @param blockId 被驱逐的数据块的BlockId
+    * @param data 被驱逐的数据块的数据
+    * @tparam T 被驱逐数据块的数据类型，从前面写入数据的流程可知，
+    *           写入的数据可能是ChunkedByteBuffer缓冲区，也有可能是数组类型的集合
+    * @return the block's new effective StorageLevel.
+    *         数据块被驱逐之后新的持久化级别
+    */
   private[storage] def dropFromMemory[T: ClassTag](
       blockId: BlockId,
       data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel
@@ -82,8 +89,7 @@ private[storage] trait BlockEvictionHandler {
  * serialized ByteBuffers.
   *
   * 内存存储。依赖于MemoryManager，负责对Block的内存存储。
- *
-  * @param conf
+  *
   * @param blockInfoManager Block信息管理器BlockInfoManager
   * @param serializerManager 序列化管理器SerializerManager
   * @param memoryManager 内存管理器MemoryManager
@@ -173,16 +179,16 @@ private[spark] class MemoryStore(
       memoryMode: MemoryMode,
       _bytes: () => ChunkedByteBuffer): Boolean = {
     require(!contains(blockId), s"Block $blockId is already present in the MemoryStore")
-    // 获取逻辑内存
-    if (memoryManager.acquireStorageMemory(blockId, size, memoryMode)) { // 获取成功
+    // 申请内存
+    if (memoryManager.acquireStorageMemory(blockId, size, memoryMode)) { // 申请成功
       // We acquired enough memory for the block, so go ahead and put it
       // 获取Block的数据
       val bytes = _bytes()
       assert(bytes.size == size)
-      // 包装为SerializedMemoryEntry对象
+      // 将数据包装为SerializedMemoryEntry对象
       val entry = new SerializedMemoryEntry[T](bytes, memoryMode, implicitly[ClassTag[T]])
       entries.synchronized {
-        // 将Block数据写入内存
+        // 将Block数据写入entries，即写入内存
         entries.put(blockId, entry)
       }
       logInfo("Block %s stored as bytes in memory (estimated size %s, free %s)".format(
@@ -241,7 +247,7 @@ private[spark] class MemoryStore(
     // 展开内存不充足时，请求增长的因子。此值固定为1.5。
     val memoryGrowthFactor = 1.5
     // Keep track of unroll memory used by this particular block / putIterator() operation
-    // Block已经使用的展开内存大小计数器，初始大小为initialMemoryThreshold。
+    // Block已经使用的展开内存大小计数器
     var unrollMemoryUsedByThisBlock = 0L
     // Underlying vector for unrolling the block
     // 用于追踪Block每次迭代的数据。
@@ -300,7 +306,7 @@ private[spark] class MemoryStore(
       // 定义将展开Block的内存转换为存储Block的内存的方法
       def transferUnrollToStorage(amount: Long): Unit = {
         // Synchronize so that transfer is atomic
-        memoryManager.synchronized {
+        memoryManager.synchronized { // 这里是需要加锁的，保证释放后能立即获取
           // 先尝试释放一些展开内存
           releaseUnrollMemoryForThisTask(MemoryMode.ON_HEAP, amount)
           // 申请存储内存
@@ -312,6 +318,7 @@ private[spark] class MemoryStore(
 
       // Acquire storage memory if necessary to store this block in memory.
       val enoughStorageMemory = {
+        // 可能需要申请额外的内存
         if (unrollMemoryUsedByThisBlock <= size) { // 如果计算的展开使用内存小于等于实际使用内存
           // 需要申请额外的内存
           val acquiredExtra =
@@ -389,21 +396,32 @@ private[spark] class MemoryStore(
 
     require(!contains(blockId), s"Block $blockId is already present in the MemoryStore")
 
+    // 根据内存模式获取内存分配器
     val allocator = memoryMode match {
-      case MemoryMode.ON_HEAP => ByteBuffer.allocate _
-      case MemoryMode.OFF_HEAP => Platform.allocateDirectBuffer _
+      case MemoryMode.ON_HEAP => ByteBuffer.allocate _ // 堆内存ByteBuffer
+      case MemoryMode.OFF_HEAP => Platform.allocateDirectBuffer _ // 堆外内存DirectBuffer
     }
 
     // Whether there is still enough memory for us to continue unrolling this block
+    // MemoryStore是否仍然有足够的内存，以便于继续展开Block。
     var keepUnrolling = true
     // Initial per-task memory to request for unrolling blocks (bytes).
+    /**
+      * 即unrollMemoryThreshold。
+      * 用来展开任何Block之前，初始请求的内存大小
+      * 可以修改属性spark.storage.unrollMemoryThreshold（默认为1MB）改变大小。
+      */
     val initialMemoryThreshold = unrollMemoryThreshold
     // Keep track of unroll memory used by this particular block / putIterator() operation
+    // Block已经使用的展开内存量计数器
     var unrollMemoryUsedByThisBlock = 0L
     // Underlying buffer for unrolling the block
+    // 包装为重定向输出流
     val redirectableStream = new RedirectableOutputStream
     val bbos = new ChunkedByteBufferOutputStream(initialMemoryThreshold.toInt, allocator)
     redirectableStream.setOutputStream(bbos)
+
+    // 包装为序列化流
     val serializationStream: SerializationStream = {
       val autoPick = !blockId.isInstanceOf[StreamBlockId]
       val ser = serializerManager.getSerializer(classTag, autoPick).newInstance()
@@ -411,57 +429,75 @@ private[spark] class MemoryStore(
     }
 
     // Request enough memory to begin unrolling
+    // 请求足够的内存开始展开操作，默认为initialMemoryThreshold，即1M
     keepUnrolling = reserveUnrollMemoryForThisTask(blockId, initialMemoryThreshold, memoryMode)
 
-    if (!keepUnrolling) {
+    if (!keepUnrolling) { // 无法请求到足够的初始内存，记录日志
       logWarning(s"Failed to reserve initial memory threshold of " +
         s"${Utils.bytesToString(initialMemoryThreshold)} for computing block $blockId in memory.")
     } else {
+      // 将申请到的内存添加到已使用的展开内存量计数器中
       unrollMemoryUsedByThisBlock += initialMemoryThreshold
     }
 
+    // 在需要时申请保留额外的展开内存
     def reserveAdditionalMemoryIfNecessary(): Unit = {
+      // 构建的ChunkedByteBufferOutputStream大小大于已经保留到的展开内存量
       if (bbos.size > unrollMemoryUsedByThisBlock) {
+        // 需要申请保留额外内存
         val amountToRequest = bbos.size - unrollMemoryUsedByThisBlock
+        // 尝试申请保留
         keepUnrolling = reserveUnrollMemoryForThisTask(blockId, amountToRequest, memoryMode)
         if (keepUnrolling) {
+          // 申请保留成功，将申请量累加到unrollMemoryUsedByThisBlock中
           unrollMemoryUsedByThisBlock += amountToRequest
         }
       }
     }
 
     // Unroll this block safely, checking whether we have exceeded our threshold
+    // 如果还有元素，且申请到了足够的初始内存
     while (values.hasNext && keepUnrolling) {
+      // 将数据元素进行序列化，并写入到流中
       serializationStream.writeObject(values.next())(classTag)
+      // 在需要时申请保留额外的展开内存
       reserveAdditionalMemoryIfNecessary()
     }
 
     // Make sure that we have enough memory to store the block. By this point, it is possible that
     // the block's actual memory usage has exceeded the unroll memory by a small amount, so we
     // perform one final call to attempt to allocate additional memory if necessary.
-    if (keepUnrolling) {
+    if (keepUnrolling) { // 申请到了足够的初始内存
+      // 将序列化流关闭
       serializationStream.close()
+      // 在需要时申请保留额外的展开内存
       reserveAdditionalMemoryIfNecessary()
     }
 
-    if (keepUnrolling) {
+    if (keepUnrolling) { // 申请到了足够的初始内存
+      // 将序列化后的数据赋值给SerializedMemoryEntry对象的buffer字段持有
       val entry = SerializedMemoryEntry[T](bbos.toChunkedByteBuffer, memoryMode, classTag)
       // Synchronize so that transfer is atomic
-      memoryManager.synchronized {
+      memoryManager.synchronized { // 加锁同步，保证释放和申请是同步的
+        // 释放之前保留的内存
         releaseUnrollMemoryForThisTask(memoryMode, unrollMemoryUsedByThisBlock)
+        // 申请对应的内存存储空间，用于正式存储
         val success = memoryManager.acquireStorageMemory(blockId, entry.size, memoryMode)
         assert(success, "transferring unroll memory to storage memory failed")
       }
       entries.synchronized {
+        // 将指定的BlockId与上面创建的SerializedMemoryEntry对象存入entries字典进行记录
         entries.put(blockId, entry)
       }
       logInfo("Block %s stored as bytes in memory (estimated size %s, free %s)".format(
         blockId, Utils.bytesToString(entry.size),
         Utils.bytesToString(maxMemory - blocksMemoryUsed)))
+      // 保存成功，返回
       Right(entry.size)
-    } else {
+    } else { // 没有申请到足够的初始内存
       // We ran out of space while unrolling the values for this block
       logUnrollFailureMessage(blockId, bbos.size)
+      // 返回保留了数据迭代器的PartiallySerializedBlock对象
       Left(
         new PartiallySerializedBlock(
           this,
@@ -696,10 +732,10 @@ private[spark] class MemoryStore(
       memory: Long,
       memoryMode: MemoryMode): Boolean = {
     memoryManager.synchronized { // 加锁
-      // 尝试获取展开内存
+      // 尝试申请展开内存
       val success = memoryManager.acquireUnrollMemory(blockId, memory, memoryMode)
-      if (success) { // 获取成功
-        // 获取TaskAttemptId
+      if (success) { // 申请成功
+        // 获取当前上下文中的TaskAttemptId
         val taskAttemptId = currentTaskAttemptId()
         // 区分内存模式
         val unrollMemoryMap = memoryMode match {
@@ -746,6 +782,10 @@ private[spark] class MemoryStore(
 
   /**
    * Return the amount of memory currently occupied for unrolling blocks across all tasks.
+    *
+    * 用于展开数据块所使用的内存大小，
+    * 是onHeapUnrollMemoryMap中的所有用于展开Block所占用的内存大小与
+    * offHeap-UnrollMemoryMap中的所有用于展开Block所占用的内存大小之和。
    */
   def currentUnrollMemory: Long = memoryManager.synchronized {
     onHeapUnrollMemoryMap.values.sum + offHeapUnrollMemoryMap.values.sum

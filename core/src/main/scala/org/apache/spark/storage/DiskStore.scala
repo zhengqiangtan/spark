@@ -32,7 +32,7 @@ import org.apache.spark.util.io.ChunkedByteBuffer
  * Stores BlockManager blocks on disk.
   *
   * 磁盘存储。依赖于DiskBlockManager，负责对Block的磁盘存储。
- *
+  *
   * @param conf SparkConf对象
   * @param diskManager 磁盘Block管理器DiskBlockManager对象
   */
