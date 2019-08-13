@@ -202,7 +202,7 @@ private[spark] class BlockManager(
     // 初始化Shuffle客户端
     shuffleClient.init(appId)
 
-    // 设置Block的复制策略
+    // 设置数据块的副本复制策略
     blockReplicationPolicy = {
       // 默认为RandomBlockReplicationPolicy
       val priorityClass = conf.get(
@@ -488,18 +488,24 @@ private[spark] class BlockManager(
         case null =>
           BlockStatus.empty
         case level =>
-          // 构造存储级别对象
+          // 检查内存存储
           val inMem = level.useMemory && memoryStore.contains(blockId)
+          // 检查磁盘存储
           val onDisk = level.useDisk && diskStore.contains(blockId)
+          // 检查序列化
           val deserialized = if (inMem) level.deserialized else false
+          // 检查副本数
           val replication = if (inMem  || onDisk) level.replication else 1
+          // 构造存储级别对象
           val storageLevel = StorageLevel(
             useDisk = onDisk,
             useMemory = inMem,
             useOffHeap = level.useOffHeap,
             deserialized = deserialized,
             replication = replication)
+          // 获取占用的内存大小
           val memSize = if (inMem) memoryStore.getSize(blockId) else 0L
+          // 获取占用的磁盘大小
           val diskSize = if (onDisk) diskStore.getSize(blockId) else 0L
           // 构造BlockStatus对象
           BlockStatus(storageLevel, memSize, diskSize)
@@ -932,6 +938,7 @@ private[spark] class BlockManager(
         Future {
           // This is a blocking action and should run in futureExecutionContext which is a cached
           // thread pool
+          // 使用replicate()方法进行副本创建
           replicate(blockId, bytes, level, classTag)
         }(futureExecutionContext)
       } else {
@@ -970,11 +977,12 @@ private[spark] class BlockManager(
 
       // 写入完成后，获取该Block块的状态
       val putBlockStatus = getCurrentBlockStatus(blockId, info)
-      // 检查是否写入成功
+      // 检查是否写入成功，通过BlockInfo中的存储级别的isValid()方法判断
       val blockWasSuccessfullyStored = putBlockStatus.storageLevel.isValid
       if (blockWasSuccessfullyStored) { // 写入成功
         // Now that the block is in either the memory or disk store,
         // tell the master about it.
+        // 更新BlockInfo中记录的size
         info.size = size
         // 必要时向BlockManagerMaster汇报BlockStatus
         if (tellMaster && info.tellMaster) {
@@ -1006,7 +1014,7 @@ private[spark] class BlockManager(
   /**
    * Helper method used to abstract common code from [[doPutBytes()]] and [[doPutIterator()]].
     *
-    * 用于执行Block的写入
+    * 用于数据块数据的写入
    *
    * @param putBody a function which attempts the actual put() and returns None on success
    *                or Some on failure.
@@ -1027,7 +1035,7 @@ private[spark] class BlockManager(
       // 构造BlockInfo对象
       val newInfo = new BlockInfo(level, classTag, tellMaster)
       if (blockInfoManager.lockNewBlockForWriting(blockId, newInfo)) { // 尝试获取写锁
-        // 走到这里说明创建成功，直接返回添加的BlockInfo
+        // 走到这里说明获取写锁成功，直接返回添加的BlockInfo
         newInfo
       } else {
         // 走到这里说明获取写锁失败，可能是有其它的线程先创建了，此时lockNewBlockForWriting()会获取读锁
@@ -1043,11 +1051,12 @@ private[spark] class BlockManager(
 
     // 记录开始时间
     val startTimeMs = System.currentTimeMillis
+    // 记录是否抛出了异常
     var exceptionWasThrown: Boolean = true
 
-    // 走到此处说明创建新的Block成功，且获取到了写锁，将尝试执行Block写入
+    // 走到此处说明创建新的BlockInfo成功，且获取到了写锁，将尝试执行数据块写入
     val result: Option[T] = try {
-      // 执行Block写入
+      // 执行Block写入，返回值如果是None，说明写入成功，否则会携带其它信息
       val res = putBody(putBlockInfo)  // putBody是传入的柯里化回调函数
       exceptionWasThrown = false
       if (res.isEmpty) {
@@ -1059,7 +1068,8 @@ private[spark] class BlockManager(
         } else { // 不需要保留读锁，直接释放锁
           blockInfoManager.unlock(blockId)
         }
-      } else { // Block存储失败，移除此Block
+      } else { // 数据块存储失败，移除此数据块
+        // 移除数据块，但不告知BlockManagerMasterEndpoint
         removeBlockInternal(blockId, tellMaster = false)
         logWarning(s"Putting block $blockId failed")
       }
@@ -1072,15 +1082,18 @@ private[spark] class BlockManager(
         // If an exception was thrown then it's possible that the code in `putBody` has already
         // notified the master about the availability of this block, so we need to send an update
         // to remove this block location.
+        // 如果抛出了异常，需要移除此数据块，根据tellMaster决定是否告知BlockManagerMasterEndpoint
         removeBlockInternal(blockId, tellMaster = tellMaster)
         // The `putBody` code may have also added a new block status to TaskMetrics, so we need
         // to cancel that out by overwriting it with an empty block status. We only do this if
         // the finally block was entered via an exception because doing this unconditionally would
         // cause us to send empty block statuses for every block that failed to be cached due to
         // a memory shortage (which is an expected failure, unlike an uncaught exception).
+        // 更新度量信息
         addUpdatedBlockStatusToTaskMetrics(blockId, BlockStatus.empty)
       }
     }
+    // 记录持久化副本数的相关日志
     if (level.replication > 1) {
       logDebug("Putting block %s with replication took %s"
         .format(blockId, Utils.getUsedTimeMs(startTimeMs)))
@@ -1306,6 +1319,8 @@ private[spark] class BlockManager(
   /**
    * Replicate block to another node. Note that this is a blocking call that returns after
    * the block has been replicated.
+    *
+    * 进行持久化副本的复制
    */
   private def replicate(
       blockId: BlockId,
@@ -1313,7 +1328,10 @@ private[spark] class BlockManager(
       level: StorageLevel,
       classTag: ClassTag[_]): Unit = {
 
+    // 最大容忍的失败副本数量，默认为1
     val maxReplicationFailures = conf.getInt("spark.storage.maxReplicationFailures", 1)
+
+    // 构造存储级别，这里的存储级别中的副本数都是1
     val tLevel = StorageLevel(
       useDisk = level.useDisk,
       useMemory = level.useMemory,
@@ -1321,28 +1339,49 @@ private[spark] class BlockManager(
       deserialized = level.deserialized,
       replication = 1)
 
+    // 需要复制的份数，原来已经存了一份了，因此-1
     val numPeersToReplicateTo = level.replication - 1
 
+    // 开始时间
     val startTime = System.nanoTime
 
+    // 副本所在的BlockManager的标识
     var peersReplicatedTo = mutable.HashSet.empty[BlockManagerId]
+    // 失败副本所在的BlockManager的标识
     var peersFailedToReplicateTo = mutable.HashSet.empty[BlockManagerId]
+
+    // 失败次数
     var numFailures = 0
 
+    /**
+      * 使用副本复制策略器获取存放副本的BlockManager的BlockManagerId标识集合，
+      * 该策略器通过spark.storage.replication.policy配置，
+      * 默认是RandomBlockReplicationPolicy，
+      * 该策略尽可能的保证选择的是不同的BlockManager
+      */
     var peersForReplication = blockReplicationPolicy.prioritize(
       blockManagerId,
-      getPeers(false),
+      getPeers(false), // 从哪些BlockManager中选择
       mutable.HashSet.empty,
       blockId,
-      numPeersToReplicateTo)
+      numPeersToReplicateTo) // 需要选择的BlockManager的个数
 
+    /**
+      * 三个条件，就进行循环：
+      * 1. 失败次数小于最大可容许的失败次数；
+      * 2. 还有待进行副本复制的BlockManager；
+      * 3. 已经复制的副本数量与要求的不一致。
+      */
     while(numFailures <= maxReplicationFailures &&
         !peersForReplication.isEmpty &&
         peersReplicatedTo.size != numPeersToReplicateTo) {
+      // 得到peersForReplication中的头一个BlockManagerId
       val peer = peersForReplication.head
       try {
+        // 记录开始时间
         val onePeerStartTime = System.nanoTime
         logTrace(s"Trying to replicate $blockId of ${data.size} bytes to $peer")
+        // 使用BlockTransferService同步上传数据到该BlockManagerId对应的BlockManager上
         blockTransferService.uploadBlockSync(
           peer.host,
           peer.port,
@@ -1353,26 +1392,40 @@ private[spark] class BlockManager(
           classTag)
         logTrace(s"Replicated $blockId of ${data.size} bytes to $peer" +
           s" in ${(System.nanoTime - onePeerStartTime).toDouble / 1e6} ms")
+        // 上传成功，移除已经上传过的头一个BlockManagerId
         peersForReplication = peersForReplication.tail
+        // 将已经上传过的BlockManagerId添加到peersReplicatedTo集合
         peersReplicatedTo += peer
-      } catch {
-        case NonFatal(e) =>
+      } catch { // 出现异常
+        case NonFatal(e) => // 非致命异常
           logWarning(s"Failed to replicate $blockId to $peer, failure #$numFailures", e)
+          // 记录上传失败的BlockManager的BlockManagerId
           peersFailedToReplicateTo += peer
           // we have a failed replication, so we get the list of peers again
           // we don't want peers we have already replicated to and the ones that
           // have failed previously
+          /**
+            * 重新获取除当前BlockManager以外的所有BlockManager的BlockManagerId集合
+            * 并将刚刚上传失败的BlockManager的BlockManagerId过滤掉
+            */
           val filteredPeers = getPeers(true).filter { p =>
             !peersFailedToReplicateTo.contains(p) && !peersReplicatedTo.contains(p)
           }
 
+          // 失败次数自增
           numFailures += 1
+
+          /**
+            * 重新使用副本复制策略器获取存放副本的BlockManager的BlockManagerId标识集合，
+            * 注意，这一次选择的范围会过滤掉已经失败的BlockManager，
+            * 同时需要的BlockManager的数量会减去已经成功的副本数量
+            */
           peersForReplication = blockReplicationPolicy.prioritize(
             blockManagerId,
-            filteredPeers,
+            filteredPeers, // 此次选择的范围会过滤掉已经失败的BlockManager
             peersReplicatedTo,
             blockId,
-            numPeersToReplicateTo - peersReplicatedTo.size)
+            numPeersToReplicateTo - peersReplicatedTo.size) // 需要的BlockManager的数量会减去已经成功的副本数量
       }
     }
 

@@ -32,11 +32,14 @@ import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStrea
 /**
  * Component which configures serialization, compression and encryption for various Spark
  * components, including automatic selection of which [[Serializer]] to use for shuffles.
- */
+ *
+  * @param defaultSerializer 默认的序列化器
+  * @param encryptionKey 加密使用的密钥
+  */
 private[spark] class SerializerManager(
-    defaultSerializer: Serializer, // 默认的序列化器
+    defaultSerializer: Serializer,
     conf: SparkConf,
-    encryptionKey: Option[Array[Byte]]) { // 加密使用的密钥
+    encryptionKey: Option[Array[Byte]]) {
 
   def this(defaultSerializer: Serializer, conf: SparkConf) = this(defaultSerializer, conf, None)
 
@@ -134,6 +137,7 @@ private[spark] class SerializerManager(
     }
   }
 
+  // 不同类型的数据块是否能够被压缩
   private def shouldCompress(blockId: BlockId): Boolean = {
     blockId match {
       case _: ShuffleBlockId => compressShuffle
@@ -183,15 +187,19 @@ private[spark] class SerializerManager(
 
   /**
    * Wrap an output stream for compression if block compression is enabled for its block type
+    * 对输出流进行压缩。
    */
   private[this] def wrapForCompression(blockId: BlockId, s: OutputStream): OutputStream = {
+    // 对数据块进行判断是否需要被压缩，如果需要则使用compressionCodec包装为压缩输出流
     if (shouldCompress(blockId)) compressionCodec.compressedOutputStream(s) else s
   }
 
   /**
    * Wrap an input stream for compression if block compression is enabled for its block type
+    * 对输入流进行压缩
    */
   private[this] def wrapForCompression(blockId: BlockId, s: InputStream): InputStream = {
+    // 对数据块进行判断是否需要被压缩，如果需要则使用compressionCodec包装为压缩输出流
     if (shouldCompress(blockId)) compressionCodec.compressedInputStream(s) else s
   }
 
@@ -202,31 +210,42 @@ private[spark] class SerializerManager(
       blockId: BlockId,
       outputStream: OutputStream,
       values: Iterator[T]): Unit = {
+    // 包装为缓冲输出流
     val byteStream = new BufferedOutputStream(outputStream)
+    // 非SteamBlock数据块是使用Kryo序列化器的前提
     val autoPick = !blockId.isInstanceOf[StreamBlockId]
+    // 获取序列化器实例
     val ser = getSerializer(implicitly[ClassTag[T]], autoPick).newInstance()
+    // 使用序列化器实例进行序列化，并将values的数据写出到outputStream
     ser.serializeStream(wrapStream(blockId, byteStream)).writeAll(values).close()
   }
 
   /** Serializes into a chunked byte buffer.
-    * 序列化成分块字节缓冲区。
+    * 序列化为ChunkedByteBuffer
     **/
   def dataSerialize[T: ClassTag](blockId: BlockId, values: Iterator[T]): ChunkedByteBuffer = {
+    // 调用dataSerializeWithExplicitClassTag()方法
     dataSerializeWithExplicitClassTag(blockId, values, implicitly[ClassTag[T]])
   }
 
   /** Serializes into a chunked byte buffer.
-    * 使用明确的类型标记，序列化成分块字节缓冲区。
+    * 使用明确的类型标记，序列化为ChunkedByteBuffer
     **/
   def dataSerializeWithExplicitClassTag(
       blockId: BlockId,
       values: Iterator[_],
       classTag: ClassTag[_]): ChunkedByteBuffer = {
+    // 包装为分块的字节缓冲输出流
     val bbos = new ChunkedByteBufferOutputStream(1024 * 1024 * 4, ByteBuffer.allocate)
+    // 包装为缓冲输出流
     val byteStream = new BufferedOutputStream(bbos)
+    // 非SteamBlock数据块是使用Kryo序列化器的前提
     val autoPick = !blockId.isInstanceOf[StreamBlockId]
+    // 获取序列化器实例
     val ser = getSerializer(classTag, autoPick).newInstance()
+    // 使用序列化器实例进行序列化，并将values的数据写出到bbos输出流
     ser.serializeStream(wrapStream(blockId, byteStream)).writeAll(values).close()
+    // 将bbos输出流转换为ChunkedByteBuffer对象
     bbos.toChunkedByteBuffer
   }
 
@@ -239,8 +258,11 @@ private[spark] class SerializerManager(
       blockId: BlockId,
       inputStream: InputStream)
       (classTag: ClassTag[T]): Iterator[T] = {
+    // 包装为缓冲输入流
     val stream = new BufferedInputStream(inputStream)
+    // 非SteamBlock数据块是使用Kryo序列化器的前提
     val autoPick = !blockId.isInstanceOf[StreamBlockId]
+    // 获取对应的序列化器实例，并使用该序列化器实例进行反序列化
     getSerializer(classTag, autoPick)
       .newInstance()
       .deserializeStream(wrapStream(blockId, stream))

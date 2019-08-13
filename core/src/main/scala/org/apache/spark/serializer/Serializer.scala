@@ -54,6 +54,8 @@ abstract class Serializer {
 
   /**
    * Sets a class loader for the serializer to use in deserialization.
+    *
+    * 反序列化时使用的类加载器，要保证子类优先使用该类加载器
    *
    * @return this Serializer object
    */
@@ -62,7 +64,10 @@ abstract class Serializer {
     this
   }
 
-  /** Creates a new [[SerializerInstance]]. */
+  /** Creates a new [[SerializerInstance]].
+    *
+    * 创建一个新的序列化器实例
+    **/
   def newInstance(): SerializerInstance
 
   /**
@@ -94,6 +99,10 @@ abstract class Serializer {
    * or called in user code and is subject to removal in future Spark releases.
    *
    * See SPARK-7311 for more details.
+    * 参数如果是true，则表示该序列化器支持重新定位他的序列化对象，否则则不行。
+    * 如果支持，这表示在流中输出的被序列化的对象的字节可以进行排序。这相当于对象排序后再进行序列化。
+    * 该属性现在被用于判断Shuffle使用哪个ShuffleWriter。
+    *
    */
   @Private
   private[spark] def supportsRelocationOfSerializedObjects: Boolean = false
@@ -110,14 +119,19 @@ abstract class Serializer {
 @DeveloperApi
 @NotThreadSafe
 abstract class SerializerInstance {
+  // 序列化特定类型的对象为ByteBuffer
   def serialize[T: ClassTag](t: T): ByteBuffer
 
+  // 将ByteBuffer反序列化为特定类型的对象，会使用当前线程的类加载器
   def deserialize[T: ClassTag](bytes: ByteBuffer): T
 
+  // 使用指定的类加载器将ByteBuffer反序列化为特定类型的对象
   def deserialize[T: ClassTag](bytes: ByteBuffer, loader: ClassLoader): T
 
+  // 将输出流包装为序列化流
   def serializeStream(s: OutputStream): SerializationStream
 
+  // 将输入流包装为反序列化流
   def deserializeStream(s: InputStream): DeserializationStream
 }
 
@@ -127,16 +141,26 @@ abstract class SerializerInstance {
  */
 @DeveloperApi
 abstract class SerializationStream {
-  /** The most general-purpose method to write an object. */
+  /** The most general-purpose method to write an object.
+    * 将对象写出到SerializationStream
+    **/
   def writeObject[T: ClassTag](t: T): SerializationStream
-  /** Writes the object representing the key of a key-value pair. */
+  /** Writes the object representing the key of a key-value pair.
+    * 将key写出到SerializationStream
+    **/
   def writeKey[T: ClassTag](key: T): SerializationStream = writeObject(key)
-  /** Writes the object representing the value of a key-value pair. */
+  /** Writes the object representing the value of a key-value pair. 、
+    * 将value写出到SerializationStream
+    **/
   def writeValue[T: ClassTag](value: T): SerializationStream = writeObject(value)
+  // 刷新
   def flush(): Unit
+  // 关闭
   def close(): Unit
 
+  // 将迭代器中的对象写出到SerializationStream
   def writeAll[T: ClassTag](iter: Iterator[T]): SerializationStream = {
+    // 遍历并调用writeObject()方法写出
     while (iter.hasNext) {
       writeObject(iter.next())
     }
@@ -151,29 +175,42 @@ abstract class SerializationStream {
  */
 @DeveloperApi
 abstract class DeserializationStream {
-  /** The most general-purpose method to read an object. */
+  /** The most general-purpose method to read an object.
+    * 从反序列化流中读取对象
+    **/
   def readObject[T: ClassTag](): T
-  /** Reads the object representing the key of a key-value pair. */
+  /** Reads the object representing the key of a key-value pair.
+    * 从反序列化流中读取对象为Key
+    **/
   def readKey[T: ClassTag](): T = readObject[T]()
-  /** Reads the object representing the value of a key-value pair. */
+  /** Reads the object representing the value of a key-value pair.
+    * 从反序列化流中读取对象为Value
+    **/
   def readValue[T: ClassTag](): T = readObject[T]()
+
+  // 关闭流
   def close(): Unit
 
   /**
    * Read the elements of this stream through an iterator. This can only be called once, as
    * reading each element will consume data from the input source.
+    *
+    * 从反序列化流中读取对象并构建为迭代器，迭代器元素为单个对象
    */
   def asIterator: Iterator[Any] = new NextIterator[Any] {
+    // 获取下一个元素的方法或通过调用readObject[Any]()方法进行读取
     override protected def getNext() = {
       try {
         readObject[Any]()
       } catch {
-        case eof: EOFException =>
+        case eof: EOFException => // 抛出EOFException说明读取完了
+          // 标记finished为true并返回null
           finished = true
           null
       }
     }
 
+    // 关闭操作
     override protected def close() {
       DeserializationStream.this.close()
     }
@@ -182,13 +219,18 @@ abstract class DeserializationStream {
   /**
    * Read the elements of this stream through an iterator over key-value pairs. This can only be
    * called once, as reading each element will consume data from the input source.
+    *
+    * 从反序列化流中读取对象并构建为迭代器，迭代器元素是键值对
    */
   def asKeyValueIterator: Iterator[(Any, Any)] = new NextIterator[(Any, Any)] {
+    // 获取下一个元素的方法或通过两次调用readObject[Any]()方法进行读取
     override protected def getNext() = {
       try {
+        // 同时读取两次，一个为键，一个为值
         (readKey[Any](), readValue[Any]())
       } catch {
-        case eof: EOFException =>
+        case eof: EOFException => // 抛出EOFException说明读取完了
+          // 标记finished为true并返回null
           finished = true
           null
       }

@@ -436,7 +436,7 @@ private[storage] class BlockInfoManager extends Logging {
         // Block does not yet exist or is removed, so we are free to acquire the write lock
         // 将新的BlockInfo放入infos字典
         infos(blockId) = newBlockInfo
-        // 尝试获取读锁
+        // 尝试获取写锁，默认阻塞
         lockForWriting(blockId)
         // 获取到则返回true
         true
