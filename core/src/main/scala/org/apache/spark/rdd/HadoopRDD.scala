@@ -55,26 +55,36 @@ import org.apache.spark.util.{NextIterator, SerializableConfiguration, ShutdownH
 private[spark] class HadoopPartition(rddId: Int, override val index: Int, s: InputSplit)
   extends Partition {
 
+  // 将数据分片构造为可序列化的对象
   val inputSplit = new SerializableWritable[InputSplit](s)
 
   override def hashCode(): Int = 31 * (31 + rddId) + index
 
+  // 只有两个HadoopPartition的引用相同才算相同
   override def equals(other: Any): Boolean = super.equals(other)
 
   /**
    * Get any environment variables that should be added to the users environment when running pipes
+    *
+    * 获取需要添加到用户运行环境的环境变量
+    *
    * @return a Map with the environment variables and corresponding values, it could be empty
    */
   def getPipeEnvVars(): Map[String, String] = {
-    val envVars: Map[String, String] = if (inputSplit.value.isInstanceOf[FileSplit]) {
-      val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
-      // map_input_file is deprecated in favor of mapreduce_map_input_file but set both
-      // since it's not removed yet
-      Map("map_input_file" -> is.getPath().toString(),
-        "mapreduce_map_input_file" -> is.getPath().toString())
-    } else {
-      Map()
-    }
+    val envVars: Map[String, String] =
+      // 判断数据分片是否是FileSplit分片
+      if (inputSplit.value.isInstanceOf[FileSplit]) {
+          // 转换数据分片为FileSplit
+          val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
+          // map_input_file is deprecated in favor of mapreduce_map_input_file but set both
+          // since it's not removed yet
+          // 将文件分片的路径保存为map_input_file和mapreduce_map_input_file属性
+          Map("map_input_file" -> is.getPath().toString(),
+          "mapreduce_map_input_file" -> is.getPath().toString())
+      } else {
+        Map()
+      }
+    // 返回环境变量
     envVars
   }
 }
@@ -197,11 +207,17 @@ class HadoopRDD[K, V](
   override def getPartitions: Array[Partition] = {
     val jobConf = getJobConf()
     // add the credentials here as this can be called before SparkContext initialized
+    // 进行Hadoop安全验证的配置
     SparkHadoopUtil.get.addCredentials(jobConf)
+    // 获取Hadoop的InputFormat
     val inputFormat = getInputFormat(jobConf)
+    // 根据InputFormat获取数据分片
     val inputSplits = inputFormat.getSplits(jobConf, minPartitions)
+    // 定义存放分区的数组
     val array = new Array[Partition](inputSplits.size)
+    // 遍历所有数据分片，为每个数据分片构造HadoopPartition
     for (i <- 0 until inputSplits.size) {
+      // id为当前HadoopRDD的ID，i为分区的索引
       array(i) = new HadoopPartition(id, i, inputSplits(i))
     }
     array

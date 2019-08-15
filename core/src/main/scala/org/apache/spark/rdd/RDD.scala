@@ -73,11 +73,9 @@ import org.apache.spark.util.random.{BernoulliCellSampler, BernoulliSampler, Poi
  * <a href="http://people.csail.mit.edu/matei/papers/2012/nsdi_spark.pdf">Spark paper</a>
  * for more details on RDD internals.
  *
-  * @param _sc
   * @param deps Dependency的序列，用于存储当前RDD的依赖。
   *             RDD的子类在实现时不一定会传递此参数。
   *             由@transient修饰，所以此属性不会被序列化。
-  * @param classTag$T
   * @tparam T
   */
 abstract class RDD[T: ClassTag](
@@ -280,8 +278,12 @@ abstract class RDD[T: ClassTag](
     checkpointRDD.map(_.partitions).getOrElse {
       // Checkpoint中没有，尝试读取partitions_属性
       if (partitions_ == null) {
-        // partitions_属性为空，则使用getPartitions()方法获取
+        /**
+          * partitions_属性为空，则使用getPartitions()方法获取
+          * getPartitions()是模板方法，需要子类实现
+          */
         partitions_ = getPartitions
+        // 检查分区编号
         partitions_.zipWithIndex.foreach { case (partition, index) =>
           require(partition.index == index,
             s"partitions($index).partition == ${partition.index}, but it should equal $index")
@@ -342,7 +344,7 @@ abstract class RDD[T: ClassTag](
     def visit(rdd: RDD[_]) {
       // 使用rdd的dependencies()获取依赖，然后进行过滤
       val narrowDependencies = rdd.dependencies.filter(_.isInstanceOf[NarrowDependency[_]])
-      // 获取祖先依赖
+      // 获取祖先依赖的RDD
       val narrowParents = narrowDependencies.map(_.rdd)
       // 过滤没有被记录的
       val narrowParentsNotVisited = narrowParents.filterNot(ancestors.contains)
@@ -440,7 +442,9 @@ abstract class RDD[T: ClassTag](
     * 用于向RDD中的所有元素应用函数。
    */
   def map[U: ClassTag](f: T => U): RDD[U] = withScope {
+    // 对传递的算子操作操作预处理
     val cleanF = sc.clean(f)
+    // 注意，此处构造的MapPartitionsRDD的prev是当前RDD
     new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))
   }
 

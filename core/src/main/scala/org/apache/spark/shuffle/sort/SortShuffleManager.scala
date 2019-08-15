@@ -96,6 +96,7 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       shuffleId: Int,
       numMaps: Int,
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+    // 判断使用哪一种ShuffleHandle
     if (SortShuffleWriter.shouldBypassMergeSort(SparkEnv.get.conf, dependency)) {
       // 需要绕开合并及排序，则创建BypassMergeSortShuffleHandle
       // If there are fewer than spark.shuffle.sort.bypassMergeThreshold partitions and we don't

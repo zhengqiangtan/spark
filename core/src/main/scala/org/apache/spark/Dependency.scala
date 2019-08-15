@@ -42,7 +42,9 @@ abstract class Dependency[T] extends Serializable {
  * Base class for dependencies where each partition of the child RDD depends on a small number
  * of partitions of the parent RDD. Narrow dependencies allow for pipelined execution.
   *
-  * 如果RDD与上游RDD的分区是一对一的关系，那么RDD和其上游RDD之间的依赖关系属于窄依赖（NarrowDependency）。
+  * 如果父RDD与子RDD的分区是一对一的关系，那么RDD和其上游RDD之间的依赖关系属于窄依赖（NarrowDependency）。
+  * 子RDD的一个分区中的数据可以来自多个父RDD的分区；
+  * 但父RDD的一个分区中的数据只能传递给一个子RDD的一个分区。
   * 有三个子类：OneToOneDependency、RangeDependency和PruneDependency
  */
 @DeveloperApi
@@ -109,7 +111,7 @@ class ShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
   // 当前ShuffleDependency的身份标识
   val shuffleId: Int = _rdd.context.newShuffleId()
 
-  // 当前ShuffleDependency的处理器
+  // 注册当前的ShuffleId，以得到对应的ShuffleDependency的处理器
   val shuffleHandle: ShuffleHandle = _rdd.context.env.shuffleManager.registerShuffle(
     shuffleId, _rdd.partitions.length, this)
 
@@ -124,7 +126,7 @@ class ShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
  */
 @DeveloperApi
 class OneToOneDependency[T](rdd: RDD[T]) extends NarrowDependency[T](rdd) {
-  // 子RDD的分区与依赖的父RDD的分区相同
+  // 获取每一个分区的所有父级别分区序列；窄依赖的子RDD的分区与依赖的父RDD的分区相同
   override def getParents(partitionId: Int): List[Int] = List(partitionId)
 }
 
@@ -133,9 +135,13 @@ class OneToOneDependency[T](rdd: RDD[T]) extends NarrowDependency[T](rdd) {
  * :: DeveloperApi ::
  * Represents a one-to-one dependency between ranges of partitions in the parent and child RDDs.
  * @param rdd the parent RDD
+  *            父RDD
  * @param inStart the start of the range in the parent RDD
+  *                依赖的分区在父RDD的分区中的起始索引
  * @param outStart the start of the range in the child RDD
+  *                 依赖的分区在子RDD的分区中的起始索引
  * @param length the length of the range
+  *               依赖的分区数量
  */
 @DeveloperApi
 class RangeDependency[T](rdd: RDD[T], inStart: Int, outStart: Int, length: Int)
@@ -149,9 +155,12 @@ class RangeDependency[T](rdd: RDD[T], inStart: Int, outStart: Int, length: Int)
     * @return the partitions of the parent RDD that the child partition depends upon
     */
   override def getParents(partitionId: Int): List[Int] = {
+    // 检查传入的子分区的ID是否合法
     if (partitionId >= outStart && partitionId < outStart + length) {
+      // 合法，返回父RDD对应的分区范围
       List(partitionId - outStart + inStart)
     } else {
+      // 不合法，直接返回空List
       Nil
     }
   }

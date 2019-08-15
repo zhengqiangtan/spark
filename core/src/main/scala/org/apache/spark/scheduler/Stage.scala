@@ -48,7 +48,7 @@ import org.apache.spark.util.CallSite
   *           Stage的身份标识
  * @param rdd RDD that this stage runs on: for a shuffle map stage, it's the RDD we run map tasks
  *   on, while for a result stage, it's the target RDD that we ran an action on
-  *   当前Stage包含的RDD
+  *   当前Stage包含的RDD，归属于本Stage的最后一个RDD
  * @param numTasks Total number of tasks in stage; result stages in particular may not need to
  *   compute all partitions, e.g. for first(), lookup(), and take().
   *   当前Stage的Task数量

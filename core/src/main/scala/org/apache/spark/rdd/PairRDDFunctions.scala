@@ -328,6 +328,7 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
    * parallelism level.
    */
   def reduceByKey(func: (V, V) => V): RDD[(K, V)] = self.withScope {
+    println(">>>>> reduceByKey: " + this)
     reduceByKey(defaultPartitioner(self), func)
   }
 

@@ -951,8 +951,11 @@ class SparkContext(config: SparkConf) extends Logging {
       path: String,
       minPartitions: Int = defaultMinPartitions): RDD[String] = withScope {
     assertNotStopped()
+    // 使用hadoopFile()方法进行读取，先得到HadoopRDD
     hadoopFile(path, classOf[TextInputFormat], classOf[LongWritable], classOf[Text],
-      minPartitions).map(pair => pair._2.toString).setName(path)
+      minPartitions)
+      // 然后进行map操作，每个pair是 (行号, 行内容) 二元元组，返回MapPartitionsRDD
+      .map(pair => pair._2.toString).setName(path)
   }
 
   /**

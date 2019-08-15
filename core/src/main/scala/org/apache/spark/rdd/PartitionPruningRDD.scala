@@ -31,16 +31,24 @@ private[spark] class PartitionPruningRDDPartition(idx: Int, val parentSplit: Par
 /**
  * Represents a dependency between the PartitionPruningRDD and its parent. In this
  * case, the child RDD contains a subset of partitions of the parents'.
+  *
+  * 用于表示PartitionPruningRDD和它的父RDD之间的分区依赖
+  * 子RDD的包含父RDD的分区的子集
  */
 private[spark] class PruneDependency[T](rdd: RDD[T], partitionFilterFunc: Int => Boolean)
   extends NarrowDependency[T](rdd) {
 
+  // 所依赖的父RDD中的分区
   @transient
   val partitions: Array[Partition] = rdd.partitions
+    // 对父RDD的分区使用partitionFilterFunc函数进行过滤
     .filter(s => partitionFilterFunc(s.index)).zipWithIndex
+    // 对每一个分区进行映射，以分区创建PartitionPruningRDDPartition分区对象
     .map { case(split, idx) => new PartitionPruningRDDPartition(idx, split) : Partition }
 
+  // 获取每一个分区的所有父级别分区序列；
   override def getParents(partitionId: Int): List[Int] = {
+    // 获取partitions中对应位置的PartitionPruningRDDPartition，返回该Partition的索引，即该Partition在父RDD中的索引
     List(partitions(partitionId).asInstanceOf[PartitionPruningRDDPartition].parentSplit.index)
   }
 }
