@@ -110,13 +110,10 @@ import org.apache.spark.util._
  *  - When adding a new data structure, update `DAGSchedulerSuite.assertDataStructuresEmpty` to
  *    include the new structure. This will help to catch memory leaks.
  *
-  * @param sc
-  * @param taskScheduler
-  * @param listenerBus
-  * @param mapOutputTracker
-  * @param blockManagerMaster
-  * @param env
-  * @param clock
+  * @param taskScheduler 用于Task调度的TaskScheduler实现
+  * @param listenerBus 事件总线
+  * @param mapOutputTracker Map任务输出追踪器
+  * @param blockManagerMaster BlockManagerMaster实例
   */
 private[spark]
 class DAGScheduler(
@@ -212,6 +209,7 @@ class DAGScheduler(
 
   // A closure serializer that we reuse.
   // This is only safe because DAGScheduler runs in a single thread.
+  // 序列化器
   private val closureSerializer = SparkEnv.get.closureSerializer.newInstance()
 
   /** If enabled, FetchFailed will not cause stage retry, in order to surface the problem.
@@ -508,6 +506,7 @@ class DAGScheduler(
   }
 
   /**
+    * 获取RDD的所有ShuffleDependency
    * Returns shuffle dependencies that are immediate parents of the given RDD.
    *
    * This function will not return more distant ancestors.  For example, if C has a shuffle
@@ -686,13 +685,19 @@ class DAGScheduler(
 
   /**
    * Submit an action job to the scheduler.
+    *
+    * 向DAGScheduler提交一个Action Job
    *
    * @param rdd target RDD to run tasks on
+    *            用于运行Task的RDD
    * @param func a function to run on each partition of the RDD
+    *             用于对每个分区的数据进行处理的函数
    * @param partitions set of partitions to run on; some jobs may not want to compute on all
    *   partitions of the target RDD, e.g. for operations like first()
+    *   所有需要处理的分区
    * @param callSite where in the user program this job was called
    * @param resultHandler callback to pass each result to
+    *                      结果回调处理器
    * @param properties scheduler properties to attach to this job, e.g. fair scheduler pool name
    *
    * @return a JobWaiter object that can be used to block until the job finishes executing
@@ -778,6 +783,7 @@ class DAGScheduler(
     val awaitPermission = null.asInstanceOf[scala.concurrent.CanAwait]
     // 等待Job处理完毕
     waiter.completionFuture.ready(Duration.Inf)(awaitPermission)
+    // 获取运行结果
     waiter.completionFuture.value.get match {
       case scala.util.Success(_) => // Job执行成功
         logInfo("Job %d finished: %s, took %f s".format
@@ -1027,6 +1033,8 @@ class DAGScheduler(
     // 记录jobId与ActiveJob的映射
     jobIdToActiveJob(jobId) = job
     activeJobs += job
+
+    // 将finalStage的ActiveJob设置为当前提交的Job
     finalStage.setActiveJob(job)
 
     // 获取Job所有Stage的StageInfo对象
@@ -1851,17 +1859,16 @@ class DAGScheduler(
   eventProcessLoop.start()
 }
 
-/**
-  * DAGScheduler内部的事件循环处理器，用于处理DAGSchedulerEvent类型的事件。
-  * @param dagScheduler
-  */
+// DAGScheduler内部的事件循环处理器，用于处理DAGSchedulerEvent类型的事件。
 private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler)
   extends EventLoop[DAGSchedulerEvent]("dag-scheduler-event-loop") with Logging {
 
+  // 度量器
   private[this] val timer = dagScheduler.metricsSource.messageProcessingTimer
 
   /**
    * The main event loop of the DAG scheduler.
+    * 处理事件的方法，复写自父类EventLoop
    */
   override def onReceive(event: DAGSchedulerEvent): Unit = {
     val timerContext = timer.time()
@@ -1918,18 +1925,23 @@ private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler
       dagScheduler.resubmitFailedStages()
   }
 
+  // 处理事件出现异常的回调方法，复写自父类EventLoop
   override def onError(e: Throwable): Unit = {
     logError("DAGSchedulerEventProcessLoop failed; shutting down SparkContext", e)
     try {
+      // 取消所有Job
       dagScheduler.doCancelAllJobs()
     } catch {
       case t: Throwable => logError("DAGScheduler failed to cancel all jobs.", t)
     }
+    // 停止SparkContext
     dagScheduler.sc.stopInNewThread()
   }
 
+  // 事件循环被停止的回调
   override def onStop(): Unit = {
     // Cancel any active jobs in postStop hook
+    // 停止DAGScheduler并进行清理工作
     dagScheduler.cleanUpAfterSchedulerStop()
   }
 }

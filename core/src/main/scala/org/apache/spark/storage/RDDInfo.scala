@@ -26,7 +26,7 @@ import org.apache.spark.util.Utils
   * @param name RDD的名称
   * @param numPartitions RDD的分区数量
   * @param storageLevel RDD的存储级别
-  * @param parentIds RDD的父RDD的id序列
+  * @param parentIds RDD的所有父RDD的id序列
   * @param callSite RDD的用户调用栈信息
   * @param scope RDD的操作范围。每一个RDD都有一个RDDOperationScope。
   *              RDDOperationScope与Stage或Job之间并无特殊关系，

@@ -70,7 +70,7 @@ private[scheduler] abstract class Stage(
     val callSite: CallSite)
   extends Logging {
 
-  // 当前Stage的分区数量
+  // 当前Stage最后一个RDD的分区数量
   val numPartitions = rdd.partitions.length
 
   /** Set of jobs that this stage belongs to.
@@ -87,6 +87,7 @@ private[scheduler] abstract class Stage(
     **/
   private var nextAttemptId: Int = 0
 
+  // 记录当前调用栈信息
   val name: String = callSite.shortForm
   val details: String = callSite.longForm
 
@@ -128,6 +129,7 @@ private[scheduler] abstract class Stage(
    */
   private[scheduler] def failedOnFetchAndShouldAbort(stageAttemptId: Int): Boolean = {
     fetchFailedAttemptIds.add(stageAttemptId)
+    // 判断是否达到最大失败次数，如果达到，当前Stage将被终止
     fetchFailedAttemptIds.size >= Stage.MAX_CONSECUTIVE_FETCH_FAILURES // 4
   }
 
@@ -166,5 +168,6 @@ private[scheduler] abstract class Stage(
 
 private[scheduler] object Stage {
   // The number of consecutive failures allowed before a stage is aborted
+  // 在连续4次执行失败后当前Stage会被终止
   val MAX_CONSECUTIVE_FETCH_FAILURES = 4
 }
