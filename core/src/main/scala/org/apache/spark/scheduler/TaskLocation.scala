@@ -23,6 +23,7 @@ package org.apache.spark.scheduler
  * of preference will be executors on the same host if this is not possible.
  */
 private[spark] sealed trait TaskLocation {
+  // 所在主机地址
   def host: String
 }
 
@@ -53,11 +54,14 @@ private[spark] object TaskLocation {
   // We identify hosts on which the block is cached with this prefix.  Because this prefix contains
   // underscores, which are not legal characters in hostnames, there should be no potential for
   // confusion.  See  RFC 952 and RFC 1123 for information about the format of hostnames.
+  // 标识内存位置信息的前缀
   val inMemoryLocationTag = "hdfs_cache_"
 
   // Identify locations of executors with this prefix.
+  // 标识Executor位置信息的前缀
   val executorLocationTag = "executor_"
 
+  // 默认创建ExecutorCacheTaskLocation实例
   def apply(host: String, executorId: String): TaskLocation = {
     new ExecutorCacheTaskLocation(host, executorId)
   }
@@ -66,20 +70,30 @@ private[spark] object TaskLocation {
    * Create a TaskLocation from a string returned by getPreferredLocations.
    * These strings have the form executor_[hostname]_[executorid], [hostname], or
    * hdfs_cache_[hostname], depending on whether the location is cached.
+    *
+    * 根据传入的字符串确定对应的位置信息实例
    */
   def apply(str: String): TaskLocation = {
+    // 去掉"hdfs_cache_"前缀
     val hstr = str.stripPrefix(inMemoryLocationTag)
-    if (hstr.equals(str)) {
-      if (str.startsWith(executorLocationTag)) {
+    if (hstr.equals(str)) { // 如果没有改变，说明不是以"hdfs_cache_"前缀开头的
+      if (str.startsWith(executorLocationTag)) { // 判断是否以"executor_"前缀开头
+        // 去掉"executor_"前缀
         val hostAndExecutorId = str.stripPrefix(executorLocationTag)
+        // 以"_"分割，最多分为2份
         val splits = hostAndExecutorId.split("_", 2)
+        // 检查切分结果是否为2份
         require(splits.length == 2, "Illegal executor location format: " + str)
+        // 获取host和Executor ID
         val Array(host, executorId) = splits
+        // 构建ExecutorCacheTaskLocation对象
         new ExecutorCacheTaskLocation(host, executorId)
-      } else {
+      } else { // 否则既不是以"hdfs_cache_"前缀开头，也不是以"executor_"前缀开头
+        // 构造HostTaskLocation对象
         new HostTaskLocation(str)
       }
     } else {
+      // 以"hdfs_cache_"前缀开头，构造HDFSCacheTaskLocation对象
       new HDFSCacheTaskLocation(hstr)
     }
   }
