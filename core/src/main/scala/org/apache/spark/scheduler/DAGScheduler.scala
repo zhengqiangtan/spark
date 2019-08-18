@@ -1352,6 +1352,11 @@ class DAGScheduler(
     // 获取Task的Class类型
     val taskType = Utils.getFormattedClassName(task)
 
+    /**
+     * 调用OutputCommitCoordinator的taskCompleted()方法
+     * 主要是为了在非Success和TaskCommitDenied的情况下重置
+     * TaskAttempt输出到HDFS的权限
+     */
     outputCommitCoordinator.taskCompleted(
       stageId,
       task.partitionId,

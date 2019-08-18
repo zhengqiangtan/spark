@@ -88,39 +88,39 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
    *
    * Note: because mapStatuses is accessed concurrently, subclasses should make sure it's a
    * thread-safe map.
-    *
-    * 用于维护各个Map任务的输出状态。
-    * 其中key对应shuffleId，键存储各个Map任务对应的状态信息MapStatus。
-    * 各个MapOutputTrackerWorker会向MapOutputTrackerMaster不断汇报Map任务的状态信息，
-    * MapOutputTrackerMaster的mapStatuses中维护的信息是最新最全的。
-    * MapOutputTrackerWorker的mapStatuses对于本节点Executor运行的Map任务状态是及时更新的，
-    * 而对于其他节点上的Map任务状态则更像一个缓存，
-    * 在mapStatuses不能命中时会向Driver上的MapOutputTrackerMaster获取最新的任务状态信息。
+   *
+   * 用于维护各个Map任务的输出状态。
+   * 其中键对应shuffleId，值存储各个Map任务对应的状态信息MapStatus。
+   * 各个MapOutputTrackerWorker会向MapOutputTrackerMaster不断汇报Map任务的状态信息，
+   * MapOutputTrackerMaster的mapStatuses中维护的信息是最新最全的。
+   * MapOutputTrackerWorker的mapStatuses对于本节点Executor运行的Map任务状态是及时更新的，
+   * 而对于其他节点上的Map任务状态则更像一个缓存，
+   * 在mapStatuses不能命中时会向Driver上的MapOutputTrackerMaster获取最新的任务状态信息。
    */
   protected val mapStatuses: Map[Int, Array[MapStatus]]
 
   /**
    * Incremented every time a fetch fails so that client nodes know to clear
    * their cache of map output locations if this happens.
-    *
-    * 用于Executor故障转移的同步标记。
-    * 每个Executor在运行的时候会更新epoch，潜在的附加动作将清空缓存。
-    * 当Executor丢失后增加epoch。
+   *
+   * 用于Executor故障转移的同步标记。
+   * 每个Executor在运行的时候会更新epoch，潜在的附加动作将清空缓存。
+   * 当Executor丢失后增加epoch。
    */
   protected var epoch: Long = 0
   // 用于保证epoch变量的线程安全性。
   protected val epochLock = new AnyRef
 
   /** Remembers which map output locations are currently being fetched on an executor.
-    * shuffle获取集合，用来记录当前Executor正在从哪些Map输出的位置拉取数据。
-    **/
+   * shuffle获取集合，用来记录当前Executor正在从哪些Map输出的位置拉取数据。
+   */
   private val fetching = new HashSet[Int]
 
   /**
    * Send a message to the trackerEndpoint and get its result within a default timeout, or
    * throw a SparkException if this fails.
-    *
-    * 用于向MapOutputTrackerMasterEndpoint发送消息，并期望在超时时间之内得到回复。
+   *
+   * 用于向MapOutputTrackerMasterEndpoint发送消息，并期望在超时时间之内得到回复。
    */
   protected def askTracker[T: ClassTag](message: Any): T = {
     try {
@@ -134,8 +134,9 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
   }
 
   /** Send a one-way message to the trackerEndpoint, to which we expect it to reply with true.
-    * 用于向MapOutputTrackerMasterEndpoint发送消息，并期望在超时时间之内获得的返回值为true。
-    **/
+   * 用于向MapOutputTrackerMasterEndpoint发送消息，
+   * 并期望在超时时间之内获得的返回值为true，否则抛出异常
+   */
   protected def sendTracker(message: Any) {
     // 使用askTracker()方法实现
     val response = askTracker[Boolean](message)
@@ -148,9 +149,9 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
   /**
    * Called from executors to get the server URIs and output sizes for each shuffle block that
    * needs to be read from a given reduce task.
-    *
-    * 通过shuffleId和reduceId获取存储了Reduce所需的Map中间输出结果的BlockManager的BlockManagerId，
-    * 以及Map中间输出结果每个Block块的BlockId与大小
+   *
+   * 通过shuffleId和reduceId获取存储了Reduce所需的Map中间输出结果的BlockManager的BlockManagerId，
+   * 以及Map中间输出结果每个Block块的BlockId与大小
    *
    * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
    *         and the second item is a sequence of (shuffle block id, shuffle block size) tuples
@@ -166,9 +167,9 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
    * Called from executors to get the server URIs and output sizes for each shuffle block that
    * needs to be read from a given range of map output partitions (startPartition is included but
    * endPartition is excluded from the range).
-    *
-    * 通过shuffleId和reduceId获取存储了Reduce所需的Map中间输出结果的BlockManager的BlockManagerId，
-    * 以及Map中间输出结果每个Block块的BlockId与大小
+   *
+   * 通过shuffleId和reduceId获取存储了Reduce所需的Map中间输出结果的BlockManager的BlockManagerId，
+   * 以及Map中间输出结果每个Block块的BlockId与大小
    *
    * @return A sequence of 2-item tuples, where the first item in the tuple is a BlockManagerId,
    *         and the second item is a sequence of (shuffle block id, shuffle block size) tuples
@@ -188,19 +189,30 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
 
   /**
    * Return statistics about all of the outputs for a given shuffle.
-    *
-    * 用于获取shuffle依赖的各个Map输出Block大小的统计信息
+   *
+   * 用于获取shuffle依赖的各个Map输出Block大小的统计信息
    */
   def getStatistics(dep: ShuffleDependency[_, _, _]): MapOutputStatistics = {
+    // 先获取ShuffleID对应的MapStatus（即Map状态信息）的数组
     val statuses = getStatuses(dep.shuffleId)
     // Synchronize on the returned array because, on the driver, it gets mutated in place
     statuses.synchronized {
+      // 获取ShuffleDependency经过分区器后的分区总数
       val totalSizes = new Array[Long](dep.partitioner.numPartitions)
+      // 遍历Map状态信息数组
       for (s <- statuses) {
+        // 遍历所有分区
         for (i <- 0 until totalSizes.length) {
+          /**
+           * 从Map状态信息中获取指定Reduce任务需要拉取的Block的大小
+           * getSizeForBlock()是MapStatus的方法
+           * 从这里的操作可以看出，Reduce任务的个数就是ShuffleDependency中分区器的总分区数
+           * 且Reduce任务的reduceId就是其通过ShuffleDependency中分区器得到的分区的ID
+           */
           totalSizes(i) += s.getSizeForBlock(i)
         }
       }
+      // 返回包含了统计信息的MapOutputStatistics样例类对象
       new MapOutputStatistics(dep.shuffleId, totalSizes)
     }
   }
@@ -235,7 +247,7 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
         // someone fetched it in between the get and the fetching.synchronized.
         // 再次尝试从本地mapStatuses字典读取
         fetchedStatuses = mapStatuses.get(shuffleId).orNull
-        // 仍未读取到，就讲shuffleId放入fetching集合，标识要开始进行获取了
+        // 仍未读取到，就将shuffleId放入fetching集合，标识要开始进行获取了
         if (fetchedStatuses == null) {
           // We have to do the fetch, get others to wait for us.
           fetching += shuffleId

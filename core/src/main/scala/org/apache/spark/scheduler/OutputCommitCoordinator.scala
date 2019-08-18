@@ -38,6 +38,11 @@ private case class AskPermissionToCommitOutput(stage: Int, partition: Int, attem
  *
  * This class was introduced in SPARK-4879; see that JIRA issue (and the associated pull requests)
  * for an extensive design discussion.
+ *
+ * 用于判定给定Stage的分区任务是否有权限将输出提交到HDFS，
+ * 并对同一分区任务的多次TaskAttempt进行协调。
+ *
+ * @param isDriver 当前节点是否是Driver节点
  */
 private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean) extends Logging {
 
@@ -45,10 +50,12 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
   // OutputCommitCoordinatorEndpoint的NettyRpcEndpointRef引用
   var coordinatorRef: Option[RpcEndpointRef] = None
 
+  // 类型别名
   private type StageId = Int
   private type PartitionId = Int
   private type TaskAttemptNumber = Int
 
+  // 未认证的Committer标识
   private val NO_AUTHORIZED_COMMITTER: TaskAttemptNumber = -1
 
   /**
@@ -59,14 +66,14 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
    * (either successfully or unsuccessfully).
    *
    * Access to this map should be guarded by synchronizing on the OutputCommitCoordinator instance.
-    *
-    * 缓存Stage的各个分区的TaskAttempt
+   *
+   * 缓存Stage的各个分区的TaskAttempt
    */
   private val authorizedCommittersByStage = mutable.Map[StageId, Array[TaskAttemptNumber]]()
 
   /**
    * Returns whether the OutputCommitCoordinator's internal data structures are all empty.
-    * 用于判断authorizedCommittersByStage是否为空
+   * 用于判断authorizedCommittersByStage是否为空
    */
   def isEmpty: Boolean = {
     authorizedCommittersByStage.isEmpty
@@ -78,12 +85,12 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
    * If a task attempt has been authorized to commit, then all other attempts to commit the same
    * task will be denied.  If the authorized task attempt fails (e.g. due to its executor being
    * lost), then a subsequent task attempt may be authorized to commit its output.
-    *
-    * 用于向OutputCommitCoordinatorEndpoint发送AskPermissionToCommitOutput，
-    * 并根据OutputCommitCoordinatorEndpoint的响应确认是否有权限将Stage的指定分区的输出提交到HDFS上。
    *
-   * @param stage the stage number
-   * @param partition the partition number
+   * 用于向OutputCommitCoordinatorEndpoint发送AskPermissionToCommitOutput，
+   * 并根据OutputCommitCoordinatorEndpoint的响应确认是否有权限将Stage的指定分区的输出提交到HDFS上。
+   *
+   * @param stage         the stage number
+   * @param partition     the partition number
    * @param attemptNumber how many times this task has been attempted
    *                      (see [[TaskContext.attemptNumber()]])
    * @return true if this task is authorized to commit, false otherwise
@@ -92,7 +99,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
       stage: StageId,
       partition: PartitionId,
       attemptNumber: TaskAttemptNumber): Boolean = {
-    // 构造消息
+    // 构造AskPermissionToCommitOutput消息
     val msg = AskPermissionToCommitOutput(stage, partition, attemptNumber)
     coordinatorRef match {
       case Some(endpointRef) =>
@@ -107,10 +114,10 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
 
   /**
    * Called by the DAGScheduler when a stage starts.
-    *
-    * 用于启动给定Stage的输出提交到HDFS的协调机制
    *
-   * @param stage the stage id.
+   * 用于启动给定Stage的输出提交到HDFS的协调机制
+   *
+   * @param stage          the stage id.
    * @param maxPartitionId the maximum partition id that could appear in this stage's tasks (i.e.
    *                       the maximum possible value of `context.partitionId`).
    */
@@ -183,9 +190,10 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
       attemptNumber: TaskAttemptNumber): Boolean = synchronized {
     // 从authorizedCommittersByStage缓存中找到给定Stage的指定分区的TaskAttemptNumber
     authorizedCommittersByStage.get(stage) match {
-      case Some(authorizedCommitters) =>
+      case Some(authorizedCommitters) => // 能找到
+        // 根据授权情况进行匹配处理
         authorizedCommitters(partition) match {
-          case NO_AUTHORIZED_COMMITTER => // 获取的TaskAttemptNumber等于NO_AUTHORIZED_COMMITTER
+          case NO_AUTHORIZED_COMMITTER => // 未授权，即获取的TaskAttemptNumber等于NO_AUTHORIZED_COMMITTER
             logDebug(s"Authorizing attemptNumber=$attemptNumber to commit for stage=$stage, " +
               s"partition=$partition")
             /**
@@ -202,7 +210,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
             // 返回false，标识当前attemptNumber没有权限将给定Stage的指定分区的输出提交到HDFS
             false
         }
-      case None =>
+      case None => // 无法找到
         logDebug(s"Stage $stage has completed, so not allowing attempt number $attemptNumber of" +
           s"partition $partition to commit")
         false
@@ -213,21 +221,28 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
 private[spark] object OutputCommitCoordinator {
 
   // This endpoint is used only for RPC
+  // OutputCommitCoordinator的RpcEndpoint
   private[spark] class OutputCommitCoordinatorEndpoint(
       override val rpcEnv: RpcEnv, outputCommitCoordinator: OutputCommitCoordinator)
     extends RpcEndpoint with Logging {
 
     logDebug("init") // force eager creation of logger
 
+    // 处理收到的不需要回复的消息
     override def receive: PartialFunction[Any, Unit] = {
-      case StopCoordinator => // 此消息将停止OutputCommitCoordinatorEndpoint
+      case StopCoordinator => // 此消息将停止OutputCommitCoordinator
         logInfo("OutputCommitCoordinator stopped!")
+        // 调用了父类RpcEndpoint的stop()方法
         stop()
     }
 
+    // 处理收到的需要回复的消息
     override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-      // 此消息将通过OutputCommitCoordinator的handleAskPermissionToCommit方法处理，进而确认客户端是否有权限将输出提交到HDFS。
       case AskPermissionToCommitOutput(stage, partition, attemptNumber) =>
+        /**
+         * 由OutputCommitCoordinator的handleAskPermissionToCommit方法处理，
+         * 以确认客户端是否有权限将输出提交到HDFS。
+         */
         context.reply(
           outputCommitCoordinator.handleAskPermissionToCommit(stage, partition, attemptNumber))
     }
