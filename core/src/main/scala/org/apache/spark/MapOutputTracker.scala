@@ -302,9 +302,9 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
    * Called from executors to update the epoch number, potentially clearing old outputs
    * because of a fetch failure. Each executor task calls this with the latest epoch
    * number on the driver at the time it was created.
-    *
-    * 当Executor运行出现故障时，Master会再分配其他Executor运行任务，
-    * 此时会调用该方法更新年代信息，并且清空mapStatuses。
+   *
+   * 当Executor运行出现故障时，Master会再分配其他Executor运行任务，
+   * 此时会调用该方法更新年代信息，并且清空mapStatuses。
    */
   def updateEpoch(newEpoch: Long) {
     epochLock.synchronized {
@@ -329,12 +329,12 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
 
 /**
  * MapOutputTracker for the driver.
-  *
-  * MapOutputTrackerWorker将Map任务的跟踪信息，
-  * 通过MapOutputTrackerMasterEndpoint的RpcEndpointRef发送给MapOutputTrackerMaster，
-  * 由MapOutputTrackerMaster负责整理和维护所有的map任务的输出跟踪信息。
-  *
-  * MapOutputTrackerMasterEndpoint位于MapOutputTrackerMaster内部，二者只存在于Driver上。
+ *
+ * MapOutputTrackerWorker将Map任务的跟踪信息，
+ * 通过MapOutputTrackerMasterEndpoint的RpcEndpointRef发送给MapOutputTrackerMaster，
+ * 由MapOutputTrackerMaster负责整理和维护所有的map任务的输出跟踪信息。
+ *
+ * MapOutputTrackerMasterEndpoint位于MapOutputTrackerMaster内部，二者只存在于Driver上。
  */
 private[spark] class MapOutputTrackerMaster(conf: SparkConf,
     broadcastManager: BroadcastManager, isLocal: Boolean)
@@ -363,17 +363,28 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
   // Number of map and reduce tasks above which we do not assign preferred locations based on map
   // output sizes. We limit the size of jobs for which assign preferred locations as computing the
   // top locations by size becomes expensive.
+  // 没有指定偏好位置信息的Map任务的最大数量
   private val SHUFFLE_PREF_MAP_THRESHOLD = 1000
   // NOTE: This should be less than 2000 as we use HighlyCompressedMapStatus beyond that
+  // 没有指定偏好位置信息的Reduce任务的最大数量，当使用HighlyCompressedMapStatus时该值需小于2000
   private val SHUFFLE_PREF_REDUCE_THRESHOLD = 1000
 
   // Fraction of total map output that must be at a location for it to considered as a preferred
   // location for a reduce task. Making this larger will focus on fewer locations where most data
   // can be read locally, but may lead to more delay in scheduling if those locations are busy.
+  /**
+   * Map任务输出的实际位置命中对应的偏好位置的占比，该值越大，数据本地化会越充分，
+   * 但也有可能由于一些位置过于繁忙导致调度出现更多时延
+   */
   private val REDUCER_PREF_LOCS_FRACTION = 0.2
 
   // HashMaps for storing mapStatuses and cached serialized statuses in the driver.
   // Statuses are dropped only by explicit de-registering.
+  /**
+   * 用于维护各个Map任务的输出状态。
+   * 其中键对应shuffleId，值存储各个Map任务对应的状态信息MapStatus。
+   * MapOutputTrackerMaster的mapStatuses中维护的信息是最新最全的。
+   */
   protected val mapStatuses = new ConcurrentHashMap[Int, Array[MapStatus]]().asScala
 
   /**
@@ -393,7 +404,7 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
   // This is required so that the Broadcast variable remains in scope until we remove
   // the shuffleId explicitly or implicitly.
   /**
-    * 用于缓存序列化的广播变量，保持与cachedSerialized-Statuses的同步。
+    * 用于缓存序列化的广播变量，保持与cachedSerializedStatuses的同步。
     * 当需要移除shuffleId在cachedSerializedStatuses中的状态数据时，此缓存中的数据也会被移除。
     */
   private val cachedSerializedBroadcast = new HashMap[Int, Broadcast[Array[Byte]]]()
@@ -413,7 +424,7 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
   // Thread pool used for handling map output status requests. This is a separate thread pool
   // to ensure we don't block the normal dispatcher threads.
   /**
-    * 用于获取map输出的固定大小的线程池。
+    * 用于处理Map任务输出状态请求消息的固定大小的线程池。
     * 此线程池提交的线程都以后台线程运行，且线程名以map-output-dispatcher为前缀，
     * 线程池大小可以使用spark.shuffle.mapOutput.dispatcher.numThreads属性配置，默认大小为8。
     */
@@ -431,6 +442,7 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
 
   // Make sure that that we aren't going to exceed the max RPC message size by making sure
   // we use broadcast to send large map output statuses.
+  // Broadcast的最小大小不可大于RPC消息的最大大小
   if (minSizeForBroadcast > maxRpcMessageSize) {
     val msg = s"spark.shuffle.mapOutput.minSizeForBroadcast ($minSizeForBroadcast bytes) must " +
       s"be <= spark.rpc.message.maxSize ($maxRpcMessageSize bytes) to prevent sending an rpc " +
@@ -482,7 +494,7 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
   /** A poison endpoint that indicates MessageLoop should exit its message loop. */
   private val PoisonPill = new GetMapOutputMessage(-99, null)
 
-  // Exposed for testing
+  // Exposed for testing 缓存的经过序列化的Broadcast的数量
   private[spark] def getNumCachedSerializedBroadcast = cachedSerializedBroadcast.size
 
   // 注册shuffleId，第二个参数为Map任务数量
@@ -497,8 +509,10 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
   }
 
   def registerMapOutput(shuffleId: Int, mapId: Int, status: MapStatus) {
+    // 获取shuffleId对应的Map状态信息数组
     val array = mapStatuses(shuffleId)
     array.synchronized {
+      // 向指定索引添加状态信息
       array(mapId) = status
     }
   }
@@ -515,16 +529,24 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
     }
   }
 
-  /** Unregister map output information of the given shuffle, mapper and block manager */
+  /** Unregister map output information of the given shuffle, mapper and block manager
+   * 根据指定Shuffle ID、Map任务ID和BlockManagerId取消Map任务输出信息的注册
+   **/
   def unregisterMapOutput(shuffleId: Int, mapId: Int, bmAddress: BlockManagerId) {
+    // 根据Shuffle ID获取对应的Map任务的状态信息数组
     val arrayOpt = mapStatuses.get(shuffleId)
+    // 判断是否存在
     if (arrayOpt.isDefined && arrayOpt.get != null) {
+      // 获取Map任务的状态信息数组
       val array = arrayOpt.get
       array.synchronized {
+        // 判断是否存在对应的Map任务ID，同时数据存储的位置要与bmAddress参数指定的一致
         if (array(mapId) != null && array(mapId).location == bmAddress) {
+          // 置空
           array(mapId) = null
         }
       }
+      // 自增年代信息
       incrementEpoch()
     } else {
       throw new SparkException("unregisterMapOutput called for nonexistent shuffle ID")
@@ -533,9 +555,13 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
 
   /** Unregister shuffle data */
   override def unregisterShuffle(shuffleId: Int) {
+    // 移除对应的Map任务状态信息数组
     mapStatuses.remove(shuffleId)
+    // 移除对应的序列化后的状态数据
     cachedSerializedStatuses.remove(shuffleId)
+    // 移除对应的序列化的广播变量缓存，最终委托给了BroadcastManager处理
     cachedSerializedBroadcast.remove(shuffleId).foreach(v => removeBroadcast(v))
+    // 移除对应的锁
     shuffleIdLocks.remove(shuffleId)
   }
 
@@ -551,17 +577,30 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
    * Return the preferred hosts on which to run the given map output partition in a given shuffle,
    * i.e. the nodes that the most outputs for that partition are on.
    *
+   * 根据ShuffleDependency和指定的Map任务输出的分区编号来获取偏好位置序列
+   *
    * @param dep shuffle dependency object
+   *            指定的ShuffleDependency
    * @param partitionId map output partition that we want to read
+   *                    指定的Map输出的分区编号
    * @return a sequence of host names
+   *         偏好位置序列
    */
   def getPreferredLocationsForShuffle(dep: ShuffleDependency[_, _, _], partitionId: Int)
       : Seq[String] = {
+    /**
+     * 需要同时满足下面的三个条件：
+     * 1. 判断是否开了为Reduce任务计算本地性的偏好的功能。
+     * 2. ShuffleDependency依赖的RDD的分区数量小于SHUFFLE_PREF_MAP_THRESHOLD阈值。
+     * 3. ShuffleDependency的分区器的总分区数量小于SHUFFLE_PREF_REDUCE_THRESHOLD阈值。
+     */
     if (shuffleLocalityEnabled && dep.rdd.partitions.length < SHUFFLE_PREF_MAP_THRESHOLD &&
         dep.partitioner.numPartitions < SHUFFLE_PREF_REDUCE_THRESHOLD) {
+      // 找出存放指定Shuffle、指定reduceId所需要拉取的数据达到一定占比的BlockManager，占比阈值为0.2
       val blockManagerIds = getLocationsWithLargestOutputs(dep.shuffleId, partitionId,
         dep.partitioner.numPartitions, REDUCER_PREF_LOCS_FRACTION)
-      if (blockManagerIds.nonEmpty) {
+      if (blockManagerIds.nonEmpty) { // 不为空
+        // 获取BlockManager所在节点的地址并返回
         blockManagerIds.get.map(_.host)
       } else {
         Nil
@@ -575,11 +614,19 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
    * Return a list of locations that each have fraction of map output greater than the specified
    * threshold.
    *
+   * 获取指定Shuffle、指定Reduce任务的Map任务输出的位置信息列表，
+   * 返回值是一个BlockManagerId列表，该列表中BlockManagerId对应的BlockManager中存放的数据
+   * 占总数据的占比需要大于指定的阈值fractionThreshold
+   *
    * @param shuffleId id of the shuffle
+   *                  指定Shuffle
    * @param reducerId id of the reduce task
+   *                  指定的Reduce任务ID
    * @param numReducers total number of reducers in the shuffle
+   *                     指定Shuffle过程中Reduce任务的总数
    * @param fractionThreshold fraction of total map output size that a location must have
    *                          for it to be considered large.
+   *                          阈值
    */
   def getLocationsWithLargestOutputs(
       shuffleId: Int,
@@ -588,39 +635,49 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
       fractionThreshold: Double)
     : Option[Array[BlockManagerId]] = {
 
+    // 从mapStatuses字典获取对应Shuffle的Map任务状态信息数组
     val statuses = mapStatuses.get(shuffleId).orNull
-    if (statuses != null) {
-      statuses.synchronized {
-        if (statuses.nonEmpty) {
+    if (statuses != null) { // 不为空才处理
+      statuses.synchronized { // 加锁
+        if (statuses.nonEmpty) { // 状态信息数组不为空
           // HashMap to add up sizes of all blocks at the same location
           val locs = new HashMap[BlockManagerId, Long]
           var totalOutputSize = 0L
           var mapIdx = 0
+          // 遍历状态信息数组
           while (mapIdx < statuses.length) {
+            // 获取对应位置的Map任务状态信息
             val status = statuses(mapIdx)
             // status may be null here if we are called between registerShuffle, which creates an
             // array with null entries for each output, and registerMapOutputs, which populates it
             // with valid status entries. This is possible if one thread schedules a job which
             // depends on an RDD which is currently being computed by another thread.
-            if (status != null) {
+            if (status != null) { // 不为空
+              // 获取指定reduceId的所需要拉取的数据块大小
               val blockSize = status.getSizeForBlock(reducerId)
-              if (blockSize > 0) {
+              if (blockSize > 0) { // 需要拉取的数据块大于0
+                // 更新locs数组，键为BlockManagerId，值为对应BlockManager上存储的数据块的大小累计值
                 locs(status.location) = locs.getOrElse(status.location, 0L) + blockSize
+                // 累计总输出大小
                 totalOutputSize += blockSize
               }
             }
+            // mapId自增
             mapIdx = mapIdx + 1
           }
+          // 过滤出单个数据块大小与总数据大小比值大于fractionThreshold阈值的位置信息
           val topLocs = locs.filter { case (loc, size) =>
             size.toDouble / totalOutputSize >= fractionThreshold
           }
           // Return if we have any locations which satisfy the required threshold
           if (topLocs.nonEmpty) {
+            // 返回过滤得到的BlockManagerId的数组
             return Some(topLocs.keys.toArray)
           }
         }
       }
     }
+    // 为空则直接返回None
     None
   }
 
@@ -631,6 +688,7 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
     }
   }
 
+  // 移除指定的Broadcast
   private def removeBroadcast(bcast: Broadcast[_]): Unit = {
     if (null != bcast) {
       // 使用BroadcastManager进行管理
@@ -639,8 +697,11 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf,
     }
   }
 
+  // 清理缓存的经过序列化的Broadcast
   private def clearCachedBroadcast(): Unit = {
+    // 遍历cachedSerializedBroadcast字典，使用removeBroadcast()方法移除
     for (cached <- cachedSerializedBroadcast) removeBroadcast(cached._2)
+    // 清空cachedSerializedBroadcast字典
     cachedSerializedBroadcast.clear()
   }
 
@@ -802,6 +863,7 @@ private[spark] object MapOutputTracker extends Logging {
   def deserializeMapStatuses(bytes: Array[Byte]): Array[MapStatus] = {
     assert (bytes.length > 0)
 
+    // 用于反序列化对象
     def deserializeObject(arr: Array[Byte], off: Int, len: Int): AnyRef = {
       val objIn = new ObjectInputStream(new GZIPInputStream(
         new ByteArrayInputStream(arr, off, len)))
@@ -814,14 +876,17 @@ private[spark] object MapOutputTracker extends Logging {
 
     bytes(0) match {
       case DIRECT =>
+        // 直接反序列化
         deserializeObject(bytes, 1, bytes.length - 1).asInstanceOf[Array[MapStatus]]
-      case BROADCAST =>
+      case BROADCAST => // Broadcast模式的反序列化
         // deserialize the Broadcast, pull .value array out of it, and then deserialize that
+        // 需要经过两次反序列化，第一次得到Broadcast对象，第二次从Broadcast得到value后再次反序列化
         val bcast = deserializeObject(bytes, 1, bytes.length - 1).
           asInstanceOf[Broadcast[Array[Byte]]]
         logInfo("Broadcast mapstatuses size = " + bytes.length +
           ", actual size = " + bcast.value.length)
         // Important - ignore the DIRECT tag ! Start from offset 1
+        // 序列化Broadcast的value
         deserializeObject(bcast.value, 1, bcast.value.length - 1).asInstanceOf[Array[MapStatus]]
       case _ => throw new IllegalArgumentException("Unexpected byte tag = " + bytes(0))
     }

@@ -23,12 +23,12 @@ import java.util.Properties
  * A set of tasks submitted together to the low-level TaskScheduler, usually representing
  * missing partitions of a particular stage.
  *
-  * @param tasks TaskSet所包含的Task的数组
-  * @param stageId Task所属Stage的身份标识
-  * @param stageAttemptId StageAttempt的身份标识
-  * @param priority 优先级。通常以JobId作为优先级。
-  * @param properties 包含了与Job有关的调度、Job group、描述等属性的Properties。
-  */
+ * @param tasks          TaskSet所包含的Task的数组
+ * @param stageId        Task所属Stage的身份标识
+ * @param stageAttemptId StageAttempt的身份标识
+ * @param priority       优先级。通常以JobId作为优先级。
+ * @param properties     包含了与Job有关的调度、Job group、描述等属性的Properties。
+ */
 private[spark] class TaskSet(
     val tasks: Array[Task[_]],
     val stageId: Int,

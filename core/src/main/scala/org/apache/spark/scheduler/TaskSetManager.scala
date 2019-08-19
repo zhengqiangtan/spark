@@ -43,13 +43,13 @@ import org.apache.spark.util.{AccumulatorV2, Clock, SystemClock, Utils}
  * TaskScheduler (e.g. its event handlers). It should not be called from other threads.
  *
  * @param sched           the TaskSchedulerImpl associated with the TaskSetManager
-  *                        即TaskSetManager所属的TaskSchedulerImpl
+ *                        即TaskSetManager所属的TaskSchedulerImpl
  * @param taskSet         the TaskSet to manage scheduling for
-  *                        当前TaskSetManager管理的TaskSet
+ *                        当前TaskSetManager管理的TaskSet
  * @param maxTaskFailures if any particular task fails this number of times, the entire
  *                        task set will be aborted
- *                         最大任务失败次数
- * @param clock          系统时钟
+ *                        最大任务失败次数
+ * @param clock           系统时钟
  */
 private[spark] class TaskSetManager(
     sched: TaskSchedulerImpl,
@@ -73,7 +73,7 @@ private[spark] class TaskSetManager(
   val env = SparkEnv.get
   val ser = env.closureSerializer.newInstance()
 
-  // askSet包含的Task数组，即TaskSet的tasks属性。
+  // TaskSet包含的Task数组，即TaskSet的tasks属性。
   val tasks = taskSet.tasks
   // TaskSet包含的Task的数量，即tasks数组的长度。
   val numTasks = tasks.length
@@ -217,12 +217,14 @@ private[spark] class TaskSetManager(
 
   // Add all our tasks to the pending lists. We do this in reverse order
   // of task index so that tasks with low indices get launched first.
+  // 将所有Task添加到待处理列表，该操作会翻转Task索引进行遍历，以保证索引越小的Task越先被启动
   for (i <- (0 until numTasks).reverse) {
+    // 调用addPendingTask()方法进行处理
     addPendingTask(i)
   }
 
   // Figure out which locality levels we have in our TaskSet, so we can do delay scheduling
-  // Task的本地性级别的数组。
+  // Task的本地性级别的数组，通过computeValidLocalityLevels()方法计算
   var myLocalityLevels = computeValidLocalityLevels()
   // 与myLocalityLevels中的每个本地性级别相对应，表示对应本地性级别的等待时间。
   var localityWaits = myLocalityLevels.map(getLocalityWait) // Time to wait at each level
@@ -248,17 +250,21 @@ private[spark] class TaskSetManager(
     *   pendingTasksWithNoPrefs、allPendingTasks等缓存中。
     **/
   private def addPendingTask(index: Int) {
-    // 遍历指定索引的Task的偏好位置序列
-    for (loc <- tasks(index).preferredLocations) {
-      // 进行匹配
+    // 获取tasks中指定索引位置上的Task的偏好位置序列，并遍历这些偏好位置序列
+    for (loc <- tasks(index).preferredLocations) { // 遍历的是TaskLocation对象
+      // 进行匹配，根据不同的偏好位置，更新到不同的字典中进行记录
       loc match {
         case e: ExecutorCacheTaskLocation =>
+          // 更新到pendingTasksForExecutor字典
           pendingTasksForExecutor.getOrElseUpdate(e.executorId, new ArrayBuffer) += index
         case e: HDFSCacheTaskLocation =>
+          // 获取对应节点上还存活的Executor集合
           val exe = sched.getExecutorsAliveOnHost(loc.host)
           exe match {
-            case Some(set) =>
+            case Some(set) => // 存在还存活的Executor
+              // 遍历所有存活的Executor
               for (e <- set) {
+                // 更新到pendingTasksForExecutor字典
                 pendingTasksForExecutor.getOrElseUpdate(e, new ArrayBuffer) += index
               }
               logInfo(s"Pending task $index has a cached location at ${e.host} " +
@@ -266,18 +272,22 @@ private[spark] class TaskSetManager(
             case None => logDebug(s"Pending task $index has a cached location at ${e.host} " +
                 ", but there are no executors alive there.")
           }
-        case _ =>
+        case _ => // 其它偏好位置，无处理
       }
+      // 更新pendingTasksForHost
       pendingTasksForHost.getOrElseUpdate(loc.host, new ArrayBuffer) += index
+      // 更新pendingTasksForRack
       for (rack <- sched.getRackForHost(loc.host)) {
         pendingTasksForRack.getOrElseUpdate(rack, new ArrayBuffer) += index
       }
     }
 
+    // 如果Task没有偏好位置信息，则将其索引添加到pendingTasksWithNoPrefs中进行记录
     if (tasks(index).preferredLocations == Nil) {
       pendingTasksWithNoPrefs += index
     }
 
+    // 将所有Task的索引添加到allPendingTasks
     allPendingTasks += index  // No point scanning this whole list to find the old task there
   }
 
@@ -624,8 +634,8 @@ private[spark] class TaskSetManager(
 
   /**
    * Get the level we can launch tasks according to delay scheduling, based on current wait time.
-    *
-    * 用于获取允许的本地性级别
+   *
+   * 用于获取允许的本地性级别
    */
   private def getAllowedLocalityLevel(curTime: Long): TaskLocality.TaskLocality = {
     // Remove the scheduled or finished tasks lazily
@@ -1113,7 +1123,9 @@ private[spark] class TaskSetManager(
 
   // 用于获取某个本地性级别的等待时间
   private def getLocalityWait(level: TaskLocality.TaskLocality): Long = {
+    // 默认为3秒
     val defaultWait = conf.get("spark.locality.wait", "3s")
+    // 根据本地性级别的不同获取不同的配置项
     val localityWaitKey = level match {
       case TaskLocality.PROCESS_LOCAL => "spark.locality.wait.process"
       case TaskLocality.NODE_LOCAL => "spark.locality.wait.node"
@@ -1122,6 +1134,7 @@ private[spark] class TaskSetManager(
     }
 
     if (localityWaitKey != null) {
+      // 从SparkConf中获取
       conf.getTimeAsMs(localityWaitKey, defaultWait)
     } else {
       0L
@@ -1163,9 +1176,13 @@ private[spark] class TaskSetManager(
   }
 
   def recomputeLocality() {
+    // 获取currentLocalityIndex索引值所记录的本地化级别
     val previousLocalityLevel = myLocalityLevels(currentLocalityIndex)
+    // 更新支持的本地化级别数组
     myLocalityLevels = computeValidLocalityLevels()
+    // 更新本地化级别所需要的等待的时间
     localityWaits = myLocalityLevels.map(getLocalityWait)
+    // 按照currentLocalityIndex之前所记录的本地化级别更新它的索引值
     currentLocalityIndex = getLocalityIndex(previousLocalityLevel)
   }
 

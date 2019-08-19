@@ -2687,7 +2687,7 @@ object SparkContext extends Logging {
   /**
    * Create a task scheduler based on a given master URL.
    * Return a 2-tuple of the scheduler backend and the task scheduler.
-    * 创建TaskScheduler和SchedulerBackend
+   * 创建TaskScheduler和SchedulerBackend
    */
   private def createTaskScheduler(
       sc: SparkContext,

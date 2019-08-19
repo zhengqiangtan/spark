@@ -56,7 +56,7 @@ import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
   * 在这些Task执行失败时进行重试，通过推测执行减轻落后的Task对整体作业进度的影响。
  *
   * @param sc
-  * @param maxTaskFailures 任务失败的最大次数
+  * @param maxTaskFailures 任务失败的最大次数，非local模式下由spark.task.maxFailures参数决定
   * @param isLocal 是否是Local部署模式
   */
 private[spark] class TaskSchedulerImpl(
@@ -155,6 +155,7 @@ private[spark] class TaskSchedulerImpl(
   private val schedulingModeConf = conf.get("spark.scheduler.mode", "FIFO")
   // 调度模式。此属性依据schedulingModeConf获取枚举类型SchedulingMode的具体值。共有FAIR、FIFO、NONE三种枚举值。
   val schedulingMode: SchedulingMode = try {
+    // 由spark.scheduler.mode参数决定
     SchedulingMode.withName(schedulingModeConf.toUpperCase)
   } catch {
     case e: java.util.NoSuchElementException =>
