@@ -59,6 +59,10 @@ sealed trait TaskFailedReason extends TaskEndReason {
    * allowed to fail before the stage is aborted.  Set to false in cases where the task's failure
    * was unrelated to the task; for example, if the task failed because the executor it was running
    * on was killed.
+   *
+   * 该字段用于标记是否将本次的失败归咎于Task自身。
+   * 这个字段为true则会增加Task失败次数的计数；当为false时则不会。
+   * 例如，当Executor宕机或被杀死时触发Task的失败，则不应该归咎于Task自身。
    */
   def countTowardsTaskFailures: Boolean = true
 }

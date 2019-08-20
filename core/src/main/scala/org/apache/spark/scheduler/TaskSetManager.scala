@@ -320,22 +320,29 @@ private[spark] class TaskSetManager(
    * Return None if the list is empty.
    * This method also cleans up any tasks in the list that have already
    * been launched, since we want that to happen lazily.
-    *
-    * 用于从给定的Task列表中按照索引，
-    * 从高到低找出满足条件（不在黑名单中、Task的复制运行数等于0、Task没有成功）的Task的索引
+   *
+   * 用于从给定的Task列表中按照索引，
+   * 从高到低找出满足条件（不在黑名单中、Task的复制运行数等于0、Task没有成功）的Task的索引
    */
   private def dequeueTaskFromList(
       execId: String,
       host: String,
       list: ArrayBuffer[Int]): Option[Int] = {
+    // 获取被过滤的Task数量
     var indexOffset = list.size
+    // 进行遍历
     while (indexOffset > 0) {
       indexOffset -= 1
+      // 获取对应的索引
       val index = list(indexOffset)
-      if (!isTaskBlacklistedOnExecOrNode(index, execId, host)) {
+      // 判断对应的Task是否被指定的Executor或节点拉黑
+      if (!isTaskBlacklistedOnExecOrNode(index, execId, host)) { // 没有被拉黑
         // This should almost always be list.trimEnd(1) to remove tail
+        // 从list中移除对应的索引
         list.remove(indexOffset)
+        // 判断Task是否存在复制任务，或者Task是否已经成功
         if (copiesRunning(index) == 0 && !successful(index)) {
+          // Task没有复制任务，且还未完成，则将其返回
           return Some(index)
         }
       }
@@ -343,12 +350,16 @@ private[spark] class TaskSetManager(
     None
   }
 
-  /** Check whether a task is currently running an attempt on a given host */
+  /** Check whether a task is currently running an attempt on a given host
+   * 判断指定节点上是否已经存在指定Task的推测执行任务
+   */
   private def hasAttemptOnHost(taskIndex: Int, host: String): Boolean = {
     taskAttempts(taskIndex).exists(_.host == host)
   }
 
+  // 判断某个Executor或节点是否拉黑了指定的Task
   private def isTaskBlacklistedOnExecOrNode(index: Int, execId: String, host: String): Boolean = {
+    // 判断Executor或节点黑名单中是否拉黑了指定的Task
     taskSetBlacklistHelperOpt.exists { blacklist =>
       blacklist.isNodeBlacklistedForTask(host, index) ||
         blacklist.isExecutorBlacklistedForTask(execId, index)
@@ -359,15 +370,16 @@ private[spark] class TaskSetManager(
    * Return a speculative task for a given executor if any are available. The task should not have
    * an attempt running on this host, in case the host is slow. In addition, the task should meet
    * the given locality constraint.
-    *
-    * 用于根据指定的Host、Executor和本地性级别，
-    * 从可推测执行的Task中找出可推测执行的Task在TaskSet中的索引和相应的本地性级别
+   *
+   * 用于根据指定的Host、Executor和本地性级别，
+   * 从可推测执行的Task中找出可推测执行的Task在TaskSet中的索引和相应的本地性级别
+   *
+   * Labeled as protected to allow tests to override providing speculative tasks if necessary
    */
-  // Labeled as protected to allow tests to override providing speculative tasks if necessary
   protected def dequeueSpeculativeTask(execId: String, host: String, locality: TaskLocality.Value)
     : Option[(Int, TaskLocality.Value)] =
   {
-    // 移除已经完成的Task
+    // 从speculatableTasks集合中移除已经完成的Task
     speculatableTasks.retain(index => !successful(index)) // Remove finished tasks from set
 
     // 判断某个推测执行Task是否可以运行在指定的Host上
@@ -465,14 +477,13 @@ private[spark] class TaskSetManager(
         }
       }
     }
-
     None
   }
 
   /**
    * Dequeue a pending task for a given node and return its index and locality level.
    * Only search for tasks matching the given locality constraint.
-    * 根据指定的Host、Executor和本地性级别，找出要执行的Task的索引、相应的本地性级别及是否进行推测执行
+   * 根据指定的Host、Executor和本地性级别，找出要执行的Task的索引、相应的本地性级别及是否进行推测执行
    *
    * @return An option containing (task index within the task set, locality, is speculative?)
    */
@@ -522,12 +533,17 @@ private[spark] class TaskSetManager(
    * NOTE: this function is either called with a maxLocality which
    * would be adjusted by delay scheduling algorithm or it will be with a special
    * NO_PREF locality which will be not modified
-    *
-    * 用于给Task按照本地性分配资源
    *
-   * @param execId the executor Id of the offered resource
-   * @param host  the host Id of the offered resource
+   * 根据给定资源和本地性级别提供运行的Task
+   *
+   * @param execId      the executor Id of the offered resource
+   *                    指定的Executor
+   * @param host        the host Id of the offered resource
+   *                    指定的节点
    * @param maxLocality the maximum locality we want to schedule the tasks at
+   *                    可提供的最大本地性级别
+   *
+   * @return 可以运行的Task的TaskDescription
    */
   @throws[TaskNotSerializableException]
   def resourceOffer(
@@ -641,7 +657,7 @@ private[spark] class TaskSetManager(
     // Remove the scheduled or finished tasks lazily
     // 用于判断给定的待处理Task数组中是否有需要调度的Task
     def tasksNeedToBeScheduledFrom(pendingTaskIds: ArrayBuffer[Int]): Boolean = {
-      // 遍历待处理的Task的ID集合
+      // 从后向前遍历待处理的Task的ID集合
       var indexOffset = pendingTaskIds.size
       while (indexOffset > 0) {
         // 维护索引
@@ -653,7 +669,7 @@ private[spark] class TaskSetManager(
           // 该Task需要被调度
           return true
         } else {
-          // 否则移除当前位置的Task，进行下一次循环
+          // 否则从pendingTaskIds移除当前位置的Task，进行下一次循环
           pendingTaskIds.remove(indexOffset)
         }
       }
@@ -663,10 +679,14 @@ private[spark] class TaskSetManager(
     // Walk through the list of tasks that can be scheduled at each location and returns true
     // if there are any tasks that still need to be scheduled. Lazily cleans up tasks that have
     // already been scheduled.
-    // 判断本地性级别对应的待处理Task的缓存结构中是否有Task需要处理
+    /**
+     * 判断本地性级别对应的待处理Task的缓存结构中是否有Task需要处理
+     * 该方法在后面会被调用，传入的pendingTasks参数将会是
+     * pendingTasksForExecutor、pendingTasksForHost、pendingTasksForRack等集合
+     */
     def moreTasksToRunIn(pendingTasks: HashMap[String, ArrayBuffer[Int]]): Boolean = {
       val emptyKeys = new ArrayBuffer[String]
-      // 判断待处理Task集合中是否有需要被调度的Task
+      // 判断待处理Task集合pendingTasks中是否有需要被调度的Task
       val hasTasks = pendingTasks.exists {
         case (id: String, tasks: ArrayBuffer[Int]) =>
           // 使用tasksNeedToBeScheduledFrom()进行判断
@@ -688,12 +708,14 @@ private[spark] class TaskSetManager(
 
     while (currentLocalityIndex < myLocalityLevels.length - 1) {
       // 查找本地性级别是否有Task要运行
-      val moreTasks = myLocalityLevels(currentLocalityIndex) match {
+      val moreTasks = myLocalityLevels(currentLocalityIndex) match { // 根据支持的本地性进行分别判断
         case TaskLocality.PROCESS_LOCAL => moreTasksToRunIn(pendingTasksForExecutor)
         case TaskLocality.NODE_LOCAL => moreTasksToRunIn(pendingTasksForHost)
         case TaskLocality.NO_PREF => pendingTasksWithNoPrefs.nonEmpty
         case TaskLocality.RACK_LOCAL => moreTasksToRunIn(pendingTasksForRack)
       }
+
+      // 判断对应的本地性级别是否有需要处理的Task
       if (!moreTasks) {
         // This is a performance optimization: if there are no more tasks that can
         // be scheduled at a particular locality level, there is no point in waiting
@@ -704,12 +726,17 @@ private[spark] class TaskSetManager(
           s"so moving to locality level ${myLocalityLevels(currentLocalityIndex + 1)}")
         currentLocalityIndex += 1
       } else if (curTime - lastLaunchTime >= localityWaits(currentLocalityIndex)) {
+        /**
+         * 否则需要判断已等待时间是否大于等于该本地性级别要求的等待时间
+         * 等待时间由curTime - lastLaunchTime来计算
+         */
         // Jump to the next locality level, and reset lastLaunchTime so that the next locality
         // wait timer doesn't immediately expire
-        // 跳入更低的本地性级别
+        // 更新lastLaunchTime
         lastLaunchTime += localityWaits(currentLocalityIndex)
         logDebug(s"Moving to ${myLocalityLevels(currentLocalityIndex + 1)} after waiting for " +
           s"${localityWaits(currentLocalityIndex)}ms")
+        // 跳入更低的本地性级别
         currentLocalityIndex += 1
       } else {
         // 返回当前本地性级别
@@ -751,9 +778,16 @@ private[spark] class TaskSetManager(
    * O(maxTaskFailures + numTasks) time, but it will be faster when there haven't been any task
    * failures (this is because the method picks one unscheduled task, and then iterates through each
    * executor until it finds one that the task isn't blacklisted on).
+   *
+   * 判断当前TaskSet是否被指定的Host或Executor拉黑，
+   * 如果被拉黑就终止当前TaskSet的执行；
+   * 该方法判断的是极端情况，即TaskSet已经没有可以运行的节点或Executor了。
+   *
+   * @param hostToExecutors 指定的Host及该Host上的Executor集合
    */
   private[scheduler] def abortIfCompletelyBlacklisted(
       hostToExecutors: HashMap[String, HashSet[String]]): Unit = {
+    // 遍历Executor和节点黑名单
     taskSetBlacklistHelperOpt.foreach { taskSetBlacklist =>
       // Only look for unschedulable tasks when at least one executor has registered. Otherwise,
       // task sets will be (unnecessarily) aborted in cases when no executors have registered yet.
@@ -764,36 +798,45 @@ private[spark] class TaskSetManager(
           // from each list, we may need to go deeper in the list.  We poll from the end because
           // failed tasks are put back at the end of allPendingTasks, so we're more likely to find
           // an unschedulable task this way.
+          // 所有等待执行Task集合allPendingTasks中最后一个没有复制任务且未完成的Task的索引
           val indexOffset = allPendingTasks.lastIndexWhere { indexInTaskSet =>
             copiesRunning(indexInTaskSet) == 0 && !successful(indexInTaskSet)
           }
+
           if (indexOffset == -1) {
+            // 没有获取到，返回None
             None
           } else {
+            // 否则返回Task的索引
             Some(allPendingTasks(indexOffset))
           }
         }
 
+        // 遍历待执行的Task
         pendingTask.foreach { indexInTaskSet =>
           // try to find some executor this task can run on.  Its possible that some *other*
           // task isn't schedulable anywhere, but we will discover that in some later call,
           // when that unschedulable task is the last task remaining.
+          // 遍历传入的hostToExecutors参数中的Host和Executor，判断TaskSet是否被这些Host或Executor拉黑
           val blacklistedEverywhere = hostToExecutors.forall { case (host, execsOnHost) =>
             // Check if the task can run on the node
+            // 判断Host是否拉黑了TaskSet，或者该Host是否拉黑了待执行的Task
             val nodeBlacklisted =
               taskSetBlacklist.isNodeBlacklistedForTaskSet(host) ||
               taskSetBlacklist.isNodeBlacklistedForTask(host, indexInTaskSet)
             if (nodeBlacklisted) {
+              // 如果被拉黑，返回true
               true
             } else {
               // Check if the task can run on any of the executors
+              // 否则判断Executor是否拉黑了TaskSet，或者该Executor是否拉黑了待执行的Task
               execsOnHost.forall { exec =>
                   taskSetBlacklist.isExecutorBlacklistedForTaskSet(exec) ||
                   taskSetBlacklist.isExecutorBlacklistedForTask(exec, indexInTaskSet)
               }
             }
           }
-          if (blacklistedEverywhere) {
+          if (blacklistedEverywhere) { // 如果存在被拉黑情况，则终止当前的TaskSet的执行
             val partition = tasks(indexInTaskSet).partitionId
             abort(s"Aborting $taskSet because task $indexInTaskSet (partition $partition) " +
               s"cannot run anywhere due to node and executor blacklist.  Blacklisting behavior " +
@@ -806,19 +849,27 @@ private[spark] class TaskSetManager(
 
   /**
    * Marks the task as getting result and notifies the DAG Scheduler
+   * 标记指定的Task正在获取计算结果，并通知DAGScheduler
    */
   def handleTaskGettingResult(tid: Long): Unit = {
+    // 获取Task对应的TaskInfo
     val info = taskInfos(tid)
+    // 标记Task被拉取数据的
     info.markGettingResult()
+    // 通知DAGScheduler
     sched.dagScheduler.taskGettingResult(info)
   }
 
   /**
    * Check whether has enough quota to fetch the result with `size` bytes
+   * 检查是否有足够的配额可供记录结果数据；当Task运行成功后，会使用该方法判断结果数据是否超限
    */
   def canFetchMoreResults(size: Long): Boolean = sched.synchronized {
+    // 所有Task执行结果的总大小自增
     totalResultSize += size
+    // 计算完成的Task数量自增
     calculatedTasks += 1
+    // 当总的结果大小大于最大限制大小（默认1GB）时，终止TaskSet
     if (maxResultSize > 0 && totalResultSize > maxResultSize) {
       val msg = s"Total size of serialized results of ${calculatedTasks} tasks " +
         s"(${Utils.bytesToString(totalResultSize)}) is bigger than spark.driver.maxResultSize " +
@@ -833,14 +884,17 @@ private[spark] class TaskSetManager(
 
   /**
    * Marks a task as successful and notifies the DAGScheduler that the task has ended.
-    *
-    * 用于对Task的执行结果（对于map任务而言，实际是任务状态）进行处理。
+   *
+   * 用于对Task的执行结果（对于map任务而言，实际是任务状态）进行处理。
    */
   def handleSuccessfulTask(tid: Long, result: DirectTaskResult[_]): Unit = {
+    // 获取对应的TaskInfo对象
     val info = taskInfos(tid)
     val index = info.index
-    info.markFinished(TaskState.FINISHED) // 将taskInfos中缓存的TaskInfo标记为已经完成
-    removeRunningTask(tid) // 将Task从正在运行的Task集合中移除
+    // 将taskInfos中缓存的TaskInfo标记为已经完成
+    info.markFinished(TaskState.FINISHED)
+    // 将Task从正在运行的Task集合中移除
+    removeRunningTask(tid)
     // This method is called by "TaskSchedulerImpl.handleSuccessfulTask" which holds the
     // "TaskSchedulerImpl" lock until exiting. To avoid the SPARK-7655 issue, we should not
     // "deserialize" the value when holding a lock to avoid blocking other threads. So we call
@@ -882,57 +936,82 @@ private[spark] class TaskSetManager(
   /**
    * Marks the task as failed, re-adds it to the list of pending tasks, and notifies the
    * DAG Scheduler.
+   *
+   * 将Task标记为指定的状态，重新将其添加到待处理集合，同时会通知DAGScheduler
    */
   def handleFailedTask(tid: Long, state: TaskState, reason: TaskFailedReason) {
+    // 获取Task的TaskInfo
     val info = taskInfos(tid)
     if (info.failed || info.killed) {
       return
     }
+    // 将该Task从runningTasksSet中移除
     removeRunningTask(tid)
+    // 将Task标记为指定的状态
     info.markFinished(state)
+    // 将该Task的复制运行数减1
     val index = info.index
     copiesRunning(index) -= 1
     var accumUpdates: Seq[AccumulatorV2[_, _]] = Seq.empty
+    // 根据传入的失败理由构造提示信息
     val failureReason = s"Lost task ${info.id} in stage ${taskSet.id} (TID $tid, ${info.host}," +
       s" executor ${info.executorId}): ${reason.toErrorString}"
+    // 根据传入的失败理由构造失败异常
     val failureException: Option[Throwable] = reason match {
+      // 拉取Shuffle数据失败，此时可能需要重新运行前一个Stage
       case fetchFailed: FetchFailed =>
         logWarning(failureReason)
+        // 将Task标记为成功
         if (!successful(index)) {
           successful(index) = true
           tasksSuccessful += 1
         }
+        // 将isZombie标记为true，表示当前TaskSet将被舍弃
         isZombie = true
         None
 
+      // 运行时异常
       case ef: ExceptionFailure =>
         // ExceptionFailure's might have accumulator updates
+        // 获取计数器
         accumUpdates = ef.accums
         if (ef.className == classOf[NotSerializableException].getName) {
+          // 未序列化异常
           // If the task result wasn't serializable, there's no point in trying to re-execute it.
           logError("Task %s in stage %s (TID %d) had a not serializable result: %s; not retrying"
             .format(info.id, taskSet.id, tid, ef.description))
+          // 终止TaskSet
           abort("Task %s in stage %s (TID %d) had a not serializable result: %s".format(
             info.id, taskSet.id, tid, ef.description))
+          // 直接返回
           return
         }
+        // 不是未序列化异常
         val key = ef.description
         val now = clock.getTimeMillis()
         val (printFull, dupCount) = {
-          if (recentExceptions.contains(key)) {
+          if (recentExceptions.contains(key)) { // 缓存的最近发生的异常中包括该异常
+            // 获取出现的次数和最近出现的时间
             val (dupCount, printTime) = recentExceptions(key)
-            if (now - printTime > EXCEPTION_PRINT_INTERVAL) {
+            if (now - printTime > EXCEPTION_PRINT_INTERVAL) { // 判断异常再次出现的间隔时间是否大于10秒
+              // 大于10秒，记录异常，只更新时间
               recentExceptions(key) = (0, now)
+              // 返回值表示是否记录详细信息，及重复出现的次数
               (true, 0)
             } else {
+              // 不大于10秒，异常次数自增
               recentExceptions(key) = (dupCount + 1, printTime)
+              // 返回值表示是否记录详细信息，及重复出现的次数
               (false, dupCount + 1)
             }
           } else {
+            // 缓存中没有该异常，则记录该异常
             recentExceptions(key) = (0, now)
             (true, 0)
           }
         }
+
+        // 根据不同情况记录日志
         if (printFull) {
           logWarning(failureReason)
         } else {
@@ -942,58 +1021,75 @@ private[spark] class TaskSetManager(
         }
         ef.exception
 
+      // Executor丢失异常，且不是由App导致的
       case e: ExecutorLostFailure if !e.exitCausedByApp =>
         logInfo(s"Task $tid failed because while it was being computed, its executor " +
           "exited for a reason unrelated to the task. Not counting this failure towards the " +
           "maximum number of failures for the task.")
         None
 
+      // Task相关的异常
       case e: TaskFailedReason =>  // TaskResultLost, TaskKilled, and others
         logWarning(failureReason)
         None
     }
 
+    // 通知DAGScheduler
     sched.dagScheduler.taskEnded(tasks(index), reason, null, accumUpdates, info)
 
-    if (successful(index)) {
+    if (successful(index)) { // 如果该存在其他Task已完成，则记录日志
       logInfo(
         s"Task ${info.id} in stage ${taskSet.id} (TID $tid) failed, " +
         "but another instance of the task has already succeeded, " +
         "so not re-queuing the task to be re-executed.")
     } else {
+      // 重新调度Task
       addPendingTask(index)
     }
 
+    /**
+     * reason.countTowardsTaskFailures字段用于标记是否将本次的失败归咎于Task自身。
+     * 这个字段为true则会增加Task失败次数的计数；当为false时则不会。
+     * 例如，当Executor宕机或被杀死时触发Task的失败，则不应该归咎于Task自身。
+     */
     if (!isZombie && reason.countTowardsTaskFailures) {
       taskSetBlacklistHelperOpt.foreach(_.updateBlacklistForFailedTask(
         info.host, info.executorId, index))
       assert (null != failureReason)
+      // 将Task的失败次数自增1
       numFailures(index) += 1
+      // 判断失败次数是否超过最大允许的失败次数，默认为4
       if (numFailures(index) >= maxTaskFailures) {
         logError("Task %d in stage %s failed %d times; aborting job".format(
           index, taskSet.id, maxTaskFailures))
+        // 超过最大失败次数，终止TaskSet
         abort("Task %d in stage %s failed %d times, most recent failure: %s\nDriver stacktrace:"
           .format(index, taskSet.id, maxTaskFailures, failureReason), failureException)
         return
       }
     }
+    // 可能的清理工作
     maybeFinishTaskSet()
   }
 
+  // 用于终止当前TaskSetManager管理的所有Task的运行
   def abort(message: String, exception: Option[Throwable] = None): Unit = sched.synchronized {
     // TODO: Kill running tasks if we were not terminated due to a Mesos error
+    // 调用DAGScheduler告知终止运行了
     sched.dagScheduler.taskSetFailed(taskSet, message, exception)
+    // 将isZombie标记置为true
     isZombie = true
+    // 进行清理工作
     maybeFinishTaskSet()
   }
 
   /** If the given task ID is not in the set of running tasks, adds it.
    *
    * Used to keep track of the number of running tasks, for enforcing scheduling policies.
-    *
-    * 向runningTasksSet中添加Task的身份标识，
-    * 并调用TaskSetManager的父调度池的increaseRunningTasks方法，
-    * 增加父调度池及祖父调度池中记录的当前正在运行的任务数量。
+   *
+   * 向runningTasksSet中添加Task的身份标识，
+   * 并调用TaskSetManager的父调度池的increaseRunningTasks方法，
+   * 增加父调度池及祖父调度池中记录的当前正在运行的任务数量。
    */
   def addRunningTask(tid: Long) {
     if (runningTasksSet.add(tid) && parent != null) {
@@ -1002,10 +1098,10 @@ private[spark] class TaskSetManager(
   }
 
   /** If the given task ID is in the set of running tasks, removes it.
-    * 从runningTasksSet中移除Task的身份标识，
-    * 并调用TaskSetManager的父调度池的decreaseRunningTasks方法，
-    * 减少父调度池及祖父调度池中记录的当前正在运行的任务数量。
-    **/
+   * 从runningTasksSet中移除Task的身份标识，
+   * 并调用TaskSetManager的父调度池的decreaseRunningTasks方法，
+   * 减少父调度池及祖父调度池中记录的当前正在运行的任务数量。
+   */
   def removeRunningTask(tid: Long) {
     if (runningTasksSet.remove(tid) && parent != null) {
       parent.decreaseRunningTasks(1)
@@ -1027,17 +1123,24 @@ private[spark] class TaskSetManager(
   }
 
   /** Called by TaskScheduler when an executor is lost so we can re-enqueue our tasks
-    * 在发生Executor丢失的情况下被调用
-    **/
+   * 在发生Executor丢失的情况下被调用
+   */
   override def executorLost(execId: String, host: String, reason: ExecutorLossReason) {
     // Re-enqueue any tasks that ran on the failed executor if this is a shuffle map stage,
     // and we are not using an external shuffle server which could serve the shuffle outputs.
     // The reason is the next stage wouldn't be able to fetch the data from this dead executor
     // so we would need to rerun these tasks on other executors.
+    // 如果是ShuffleMapTask，且没有外部Shuffle服务
     if (tasks(0).isInstanceOf[ShuffleMapTask] && !env.blockManager.externalShuffleServiceEnabled) {
+      // 遍历得到Task和它TaskAttempt的TaskInfo对象，这些Task所运行的Executor即是丢失的Executor
       for ((tid, info) <- taskInfos if info.executorId == execId) {
         val index = taskInfos(tid).index
-        if (successful(index)) {
+        /**
+         * 由于没有使用外部Shuffle服务，而且是ShuffleMapTask，Executor丢失后，
+         * 就算存在执行成功的Task，但因为Executor丢失了，因此Map任务输出的Shuffle数据也会丢失，
+         * 因此需要对这些Task进行重新计算，此时会触发Stage的重新提交。
+         */
+        if (successful(index)) { // 如果Task已经成功
           successful(index) = false // 将此Task标记为未成功
           copiesRunning(index) -= 1 // 将此Task的复制运行数量减一
           tasksSuccessful -= 1 // 将当前TaskSetManager中成功执行的Task数量减一
@@ -1050,7 +1153,10 @@ private[spark] class TaskSetManager(
         }
       }
     }
+
+    // 遍历得到Task和它TaskAttempt的TaskInfo对象，这些Task正在运行，且所运行的Executor即是丢失的Executor
     for ((tid, info) <- taskInfos if info.running && info.executorId == execId) {
+      // 根据Executor丢失具体情况得到exitCausedByApp的值
       val exitCausedByApp: Boolean = reason match {
         // 获取Executor丢失的具体原因是否是由应用程序引起的
         case exited: ExecutorExited => exited.exitCausedByApp
@@ -1072,8 +1178,8 @@ private[spark] class TaskSetManager(
    *
    * TODO: To make this scale to large jobs, we need to maintain a list of running tasks, so that
    * we don't scan the whole task set. It might also help to make this sorted by launch time.
-    *
-    * 用于检查当前TaskSetManager中是否有需要推测执行的Task
+   *
+   * 用于检查当前TaskSetManager中是否有需要推测执行的Task
    */
   override def checkSpeculatableTasks(minTimeToSpeculation: Int): Boolean = {
     // Can't speculate if we only have one task, and no need to speculate if the task set is a

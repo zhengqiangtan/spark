@@ -114,6 +114,7 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
           // 从文件系统中读取公平调度配置的文件输入流
           new FileInputStream(f)
         }.getOrElse {
+          // 或者获取fairscheduler.xml文件的输入流
           Utils.getSparkClassLoader.getResourceAsStream(DEFAULT_SCHEDULER_FILE)
         }
       }
@@ -189,16 +190,18 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
 
   // 添加TaskSetManager
   override def addTaskSetManager(manager: Schedulable, properties: Properties) {
+    // "default"
     var poolName = DEFAULT_POOL_NAME
     // 以默认调度池作为TaskSetManager的父调度池
     var parentPool = rootPool.getSchedulableByName(poolName)
     // 判断默认调度池是否存在
-    if (properties != null) { // 默认父调度池不存在
-      // 以spark.scheduler.pool属性指定的调度池作为TaskSetManager的父调度池
+    if (properties != null) { // 指定了配置信息
+      // 以spark.scheduler.pool属性指定的调度池作为TaskSetManager的父调度池，如果没有指定则默认为"default"调度池
       poolName = properties.getProperty(FAIR_SCHEDULER_PROPERTIES, DEFAULT_POOL_NAME)
+      // 获取poolName指定的父调度池
       parentPool = rootPool.getSchedulableByName(poolName)
 
-      if (parentPool == null) { // 指定的父调度池也不存在
+      if (parentPool == null) { // 指定的父调度池不存在
         // we will create a new pool that user has configured in app
         // instead of being defined in xml file
         // 创建新的父调度池
@@ -211,7 +214,7 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
       }
     }
 
-    // 将TaskSetManager放入父调度池
+    // 将TaskSetManager放入指定的父调度池
     parentPool.addSchedulable(manager)
     logInfo("Added task set " + manager.name + " tasks to pool " + poolName)
   }
