@@ -43,12 +43,12 @@ private case class StopExecutor()
  * RpcEndpoint makes the calls on [[LocalSchedulerBackend]] asynchronous, which is necessary
  * to prevent deadlock between [[LocalSchedulerBackend]] and the [[TaskSchedulerImpl]].
  *
-  * @param rpcEnv
-  * @param userClassPath 用户指定的ClassPath
-  * @param scheduler 即Driver中的TaskSchedulerImpl
-  * @param executorBackend 与LocalEndpoint相关联的LocalSchedulerBackend
-  * @param totalCores 用于执行任务的CPU内核总数。local模式下，totalCores固定为1。
-  */
+ * @param rpcEnv
+ * @param userClassPath   用户指定的ClassPath
+ * @param scheduler       即Driver中的TaskSchedulerImpl
+ * @param executorBackend 与LocalEndpoint相关联的LocalSchedulerBackend
+ * @param totalCores      用于执行任务的CPU内核总数。local模式下，totalCores固定为1。
+ */
 private[spark] class LocalEndpoint(
     override val rpcEnv: RpcEnv,
     userClassPath: Seq[URL],
@@ -72,8 +72,7 @@ private[spark] class LocalEndpoint(
   val localExecutorHostname = "localhost"
 
   /**
-    * 与Driver处于同一JVM进程的Executor。
-    * 由于LocalEndpoint的totalCores等于1，因此应用本地有且只有一个Executor，
+    * 与Driver处于同一JVM进程的Executor，本地有且只有一个Executor，
     * 且此Executor在LocalEndpoint构造的过程中就已经实例化。
     */
   private val executor = new Executor(
@@ -112,7 +111,7 @@ private[spark] class LocalEndpoint(
     val offers = IndexedSeq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
     // 给Task分配资源
     for (task <- scheduler.resourceOffers(offers).flatten) {
-      // 将空闲CPU内核数freeCores减1
+      // 将空闲CPU内核数freeCores减1，CPUS_PER_TASK默认值为1
       freeCores -= scheduler.CPUS_PER_TASK
       // 运行Task
       executor.launchTask(executorBackend, taskId = task.taskId, attemptNumber = task.attemptNumber,
@@ -125,8 +124,8 @@ private[spark] class LocalEndpoint(
  * Used when running a local version of Spark where the executor, backend, and master all run in
  * the same JVM. It sits behind a [[TaskSchedulerImpl]] and handles launching tasks on a single
  * Executor (created by the [[LocalSchedulerBackend]]) running locally.
-  *
-  * local模式中的调度后端接口。在local模式下，Executor、LocalSchedulerBackend、Driver都运行在同一个JVM进程中。
+ *
+ * local模式中的调度后端接口。在local模式下，Executor、LocalSchedulerBackend、Driver都运行在同一个JVM进程中。
  */
 private[spark] class LocalSchedulerBackend(
     conf: SparkConf,

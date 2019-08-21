@@ -32,9 +32,9 @@ import org.apache.spark.util.Utils
 
 /**
  * A [[SchedulerBackend]] implementation for Spark's standalone cluster manager.
-  *
-  * 在local-cluster模式和Standalone部署模式下的SchedulerBackend实现
-  * 继承自CoarseGrainedSchedulerBackend
+ *
+ * 在local-cluster模式和Standalone部署模式下的SchedulerBackend实现
+ * 继承自CoarseGrainedSchedulerBackend
  */
 private[spark] class StandaloneSchedulerBackend(
     scheduler: TaskSchedulerImpl,
@@ -125,14 +125,14 @@ private[spark] class StandaloneSchedulerBackend(
     // 将extraJavaOpts与sparkJavaOpts合并到javaOpts
     val javaOpts = sparkJavaOpts ++ extraJavaOpts
     /**
-      * 创建Command。Command类定义了执行Executor的命令。
-      * - 以org.apache.spark.executor.CoarseGrainedExecutorBackend作为Command的mainClass属性
-      * - 以args作为Command的arguments属性
-      * - 以SparkContext的executorEnvs属性作为Command的environment属性
-      * - 以classPathEntries作为Command的classPathEntries属性
-      * - 以libraryPathEntries作为Command的libraryPathEntries属性
-      * - 以javaOpts作为Command的javaOpts属性
-      */
+     * 创建Command。Command类定义了执行Executor的命令。
+     * - 以org.apache.spark.executor.CoarseGrainedExecutorBackend作为Command的mainClass属性
+     * - 以args作为Command的arguments属性
+     * - 以SparkContext的executorEnvs属性作为Command的environment属性
+     * - 以classPathEntries作为Command的classPathEntries属性
+     * - 以libraryPathEntries作为Command的libraryPathEntries属性
+     * - 以javaOpts作为Command的javaOpts属性
+     */
     val command = Command("org.apache.spark.executor.CoarseGrainedExecutorBackend",
       args, sc.executorEnvs, classPathEntries ++ testingClassPath, libraryPathEntries, javaOpts)
 
@@ -205,14 +205,18 @@ private[spark] class StandaloneSchedulerBackend(
   }
 
   override def dead(reason: String) {
+    // 解除start()方法的阻塞
     notifyContext()
     if (!stopping) {
+      // 设置Application状态为KILLED
       launcherBackend.setState(SparkAppHandle.State.KILLED)
       logError("Application has been killed. Reason: " + reason)
       try {
+        // 通知TaskSchedulerImpl出现错误了
         scheduler.error(reason)
       } finally {
         // Ensure the application terminates, as we can no longer run jobs.
+        // 停止SparkContext
         sc.stopInNewThread()
       }
     }
@@ -226,11 +230,13 @@ private[spark] class StandaloneSchedulerBackend(
 
   override def executorRemoved(
       fullId: String, message: String, exitStatus: Option[Int], workerLost: Boolean) {
+    // 根据退出状态码构造具体的移除理由
     val reason: ExecutorLossReason = exitStatus match {
       case Some(code) => ExecutorExited(code, exitCausedByApp = true, message)
       case None => SlaveLost(message, workerLost = workerLost)
     }
     logInfo("Executor %s removed: %s".format(fullId, message))
+    // 调用父类的方法处理
     removeExecutor(fullId.split("/")(1), reason)
   }
 
@@ -251,10 +257,11 @@ private[spark] class StandaloneSchedulerBackend(
    * @return whether the request is acknowledged.
    */
   protected override def doRequestTotalExecutors(requestedTotal: Int): Future[Boolean] = {
+    // 获取StandaloneAppClient
     Option(client) match {
       // 调用了StandaloneAppClient的requestTotalExecutors()方法向Master请求所需的所有Executor资源。
       case Some(c) => c.requestTotalExecutors(requestedTotal)
-      case None =>
+      case None => // 没有获取到StandaloneAppClient，说明Driver还没有初始化完成
         logWarning("Attempted to request executors before driver fully initialized.")
         Future.successful(false)
     }
@@ -265,9 +272,11 @@ private[spark] class StandaloneSchedulerBackend(
    * @return whether the kill request is acknowledged.
    */
   protected override def doKillExecutors(executorIds: Seq[String]): Future[Boolean] = {
+    // 获取StandaloneAppClient
     Option(client) match {
+      // 调用了StandaloneAppClient的killExecutors()方法杀死Executor
       case Some(c) => c.killExecutors(executorIds)
-      case None =>
+      case None => // 没有获取到StandaloneAppClient，说明Driver还没有初始化完成
         logWarning("Attempted to kill executors before driver fully initialized.")
         Future.successful(false)
     }
