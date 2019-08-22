@@ -1022,7 +1022,12 @@ abstract class RDD[T: ClassTag](
    * all the data is loaded into the driver's memory.
    */
   def collect(): Array[T] = withScope {
-    val results = sc.runJob(this, (iter: Iterator[T]) => iter.toArray)
+    val resultHandler = (iter: Iterator[T]) => {
+      // 可见，有多少个分区，该结果处理器就会被调用多少次
+      println(">>>>> resultHandler")
+      iter.toArray
+    }
+    val results = sc.runJob(this, resultHandler)
     Array.concat(results: _*)
   }
 

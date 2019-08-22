@@ -279,7 +279,9 @@ class DAGScheduler(
       // (taskId, stageId, stageAttemptId, accumUpdates)
       accumUpdates: Array[(Long, Int, Int, Seq[AccumulableInfo])],
       blockManagerId: BlockManagerId): Boolean = {
+    // 向事件总线投递SparkListenerExecutorMetricsUpdate消息
     listenerBus.post(SparkListenerExecutorMetricsUpdate(execId, accumUpdates))
+    // 向BlockManagerMasterEndpoint发送BlockManagerHeartbeat告知BlockManager还存活
     blockManagerMaster.driverEndpoint.askWithRetry[Boolean](
       BlockManagerHeartbeat(blockManagerId), new RpcTimeout(600 seconds, "BlockManagerHeartbeat"))
   }
@@ -1341,8 +1343,8 @@ class DAGScheduler(
   /**
    * Responds to a task finishing. This is called inside the event loop so it assumes that it can
    * modify the scheduler's internal state. Use taskEnded() to post a task end event from outside.
-    *
-    * 对执行完成的Task进行处理
+   *
+   * 对执行完成的Task进行处理
    */
   private[scheduler] def handleTaskCompletion(event: CompletionEvent) {
     // 获取Task、Task ID、Stage ID等

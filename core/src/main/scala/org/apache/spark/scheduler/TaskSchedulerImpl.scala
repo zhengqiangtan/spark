@@ -50,21 +50,21 @@ import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
  * [[SchedulerBackend]]s synchronize on themselves when they want to send events here, and then
  * acquire a lock on us, so we need to make sure that we don't try to lock the backend while
  * we are holding a lock on ourselves.
-  *
-  * TaskSchedulerImpl的功能包括接收DAGScheduler给每个Stage创建的Task集合，
-  * 按照调度算法将资源分配给Task，将Task交给Spark集群不同节点上的Executor运行，
-  * 在这些Task执行失败时进行重试，通过推测执行减轻落后的Task对整体作业进度的影响。
  *
-  * @param sc
-  * @param maxTaskFailures 任务失败的最大次数，非local模式下由spark.task.maxFailures参数决定
-  * @param isLocal 是否是Local部署模式
-  */
+ * TaskSchedulerImpl的功能包括接收DAGScheduler给每个Stage创建的Task集合，
+ * 按照调度算法将资源分配给Task，将Task交给Spark集群不同节点上的Executor运行，
+ * 在这些Task执行失败时进行重试，通过推测执行减轻落后的Task对整体作业进度的影响。
+ *
+ * @param maxTaskFailures 任务失败的最大次数，非local模式下由spark.task.maxFailures参数决定
+ * @param isLocal         是否是Local部署模式
+ */
 private[spark] class TaskSchedulerImpl(
     val sc: SparkContext,
     val maxTaskFailures: Int,
     isLocal: Boolean = false)
   extends TaskScheduler with Logging
 {
+  // 传入的MAX_TASK_FAILURES由spark.task.maxFailures参数配置，默认值为4
   def this(sc: SparkContext) = this(sc, sc.conf.get(config.MAX_TASK_FAILURES))
 
   val conf = sc.conf
@@ -77,10 +77,10 @@ private[spark] class TaskSchedulerImpl(
   // at least this amount of time. This is to avoid the overhead of launching speculative copies
   // of tasks that are very short.
   /**
-    * 用于保证原始任务至少需要运行的时间。大小固定为100。
-    * 原始任务只有超过此时间限制，才允许启动副本任务。
-    * 这可以避免原始任务执行太短的时间就被推测执行副本任务。
-    */
+   * 用于保证原始任务至少需要运行的时间。大小固定为100。
+   * 原始任务只有超过此时间限制，才允许启动副本任务。
+   * 这可以避免原始任务执行太短的时间就被推测执行副本任务。
+   */
   val MIN_TIME_TO_SPECULATION = 100
 
   // 对任务调度进行推测执行的线程池，创建的线程以task-scheduler-speculation为前缀。
@@ -97,7 +97,7 @@ private[spark] class TaskSchedulerImpl(
 
   // TaskSetManagers are not thread safe, so any access to one should be synchronized
   // on this class.
-  // 用于StageId、Attempt、TaskSetManager的二级缓存。
+  // 用于StageId、Stage Attempt、TaskSetManager的二级缓存。
   private val taskSetsByStageIdAndAttempt = new HashMap[Int, HashMap[Int, TaskSetManager]]
 
   // Protected by `this`
@@ -123,6 +123,7 @@ private[spark] class TaskSchedulerImpl(
   // 用于缓存Executor与运行在此Executor上的任务之间的映射关系，一个Executor上可以运行多个Task。
   private val executorIdToRunningTaskIds = new HashMap[String, HashSet[Long]]
 
+  // 获取每个Executor上运行的Task数量的字典
   def runningTasksByExecutors: Map[String, Int] = synchronized {
     executorIdToRunningTaskIds.toMap.mapValues(_.size)
   }
@@ -139,12 +140,16 @@ private[spark] class TaskSchedulerImpl(
   protected val executorIdToHost = new HashMap[String, String]
 
   // Listener object to pass upcalls into
+  // DAGScheduler
   var dagScheduler: DAGScheduler = null
 
+  // SchedulerBackend
   var backend: SchedulerBackend = null
 
+  // MapOutputTracker
   val mapOutputTracker = SparkEnv.get.mapOutputTracker
 
+  // SchedulableBuilder
   var schedulableBuilder: SchedulableBuilder = null
 
   // 根调度池
@@ -153,7 +158,10 @@ private[spark] class TaskSchedulerImpl(
   // default scheduler is FIFO
   // 调度模式配置。可以通过spark.scheduler.mode属性配置，默认为FIFO。
   private val schedulingModeConf = conf.get("spark.scheduler.mode", "FIFO")
-  // 调度模式。此属性依据schedulingModeConf获取枚举类型SchedulingMode的具体值。共有FAIR、FIFO、NONE三种枚举值。
+  /**
+   * 调度模式。此属性依据schedulingModeConf获取枚举类型SchedulingMode的具体值。
+   * 共有FAIR、FIFO、NONE三种枚举值。
+   */
   val schedulingMode: SchedulingMode = try {
     // 由spark.scheduler.mode参数决定
     SchedulingMode.withName(schedulingModeConf.toUpperCase)
@@ -300,17 +308,30 @@ private[spark] class TaskSchedulerImpl(
    * cleaned up.
    */
   def taskSetFinished(manager: TaskSetManager): Unit = synchronized {
+    // 获取对应的Stage对应的Stage Attempt及TaskSetManager
     taskSetsByStageIdAndAttempt.get(manager.taskSet.stageId).foreach { taskSetsForStage =>
+      // 移除此次Stage Attempt
       taskSetsForStage -= manager.taskSet.stageAttemptId
+      // 如果没有剩余的Stage Attempt，就将该Stage从taskSetsByStageIdAndAttempt中移除
       if (taskSetsForStage.isEmpty) {
         taskSetsByStageIdAndAttempt -= manager.taskSet.stageId
       }
     }
+    // 从TaskSetManager的所属调度池中移除自己
     manager.parent.removeSchedulable(manager)
     logInfo(s"Removed TaskSet ${manager.taskSet.id}, whose tasks have all completed, from pool" +
       s" ${manager.parent.name}")
   }
 
+  /**
+   * 为TaskSetManager中的Task分配资源
+   * @param taskSet 目标TaskSetManager
+   * @param maxLocality 指定本次分配过程中该TaskSetManager支持的最高本地化级别
+   * @param shuffledOffers 可供使用的Executor资源集合
+   * @param availableCpus 每个Executor可供使用的CPU Core数量
+   * @param tasks 最终分配到资源的Task对应的TaskDescription数组
+   * @return 是否有Task被分配了资源，该返回值会决定
+   */
   private def resourceOfferSingleTaskSet(
       taskSet: TaskSetManager,
       maxLocality: TaskLocality,
@@ -324,7 +345,11 @@ private[spark] class TaskSchedulerImpl(
       val execId = shuffledOffers(i).executorId
       // 获取WorkerOffer的Host
       val host = shuffledOffers(i).host
-      // WorkerOffer的可用的CPU核数大于等于CPUS_PER_TASK
+
+      /**
+       * WorkerOffer的可用的CPU核数大于等于CPUS_PER_TASK才可以继续分配，
+       * CPUS_PER_TASK由spark.task.cpus参数配置，默认为1。
+       */
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
           // 给符合条件的待处理Task创建TaskDescription
@@ -341,6 +366,7 @@ private[spark] class TaskSchedulerImpl(
               * 因此WorkerOffer的可用的CPU核数减去CPUS_PER_TASK
               */
             availableCpus(i) -= CPUS_PER_TASK
+            // 防止CPU Core超额分配
             assert(availableCpus(i) >= 0)
             launchedTask = true
           }
@@ -370,13 +396,17 @@ private[spark] class TaskSchedulerImpl(
     var newExecAvail = false
     // 遍历WorkerOffer序列
     for (o <- offers) {
+      // 先将资源中的主机记录更新到hostToExecutors字典中
       if (!hostToExecutors.contains(o.host)) {
         hostToExecutors(o.host) = new HashSet[String]()
       }
       // 更新Host与Executor的各种映射关系
-      if (!executorIdToRunningTaskIds.contains(o.executorId)) {
+      if (!executorIdToRunningTaskIds.contains(o.executorId)) { // 说明Executor是新添加的
         hostToExecutors(o.host) += o.executorId
-        // 向DAGScheduler的DAGSchedulerEventProcessLoop投递ExecutorAdded事件
+        /**
+         * 向DAGScheduler的DAGSchedulerEventProcessLoop投递ExecutorAdded事件
+         * 告知有新的Executor添加了
+         */
         executorAdded(o.executorId, o.host)
         executorIdToHost(o.executorId) = o.host
         executorIdToRunningTaskIds(o.executorId) = HashSet[Long]()
@@ -393,7 +423,10 @@ private[spark] class TaskSchedulerImpl(
     // 随机洗牌，避免将任务总是分配给同样一组Worker
     val shuffledOffers = Random.shuffle(offers)
     // Build a list of tasks to assign to each worker.
-    // 根据每个WorkerOffer的可用的CPU核数创建同等尺寸的TaskDescription数组
+    /**
+     * 根据每个WorkerOffer的可用的CPU核数创建同等尺寸的TaskDescription数组
+     * 从这里可以看出，每个CPU Core只供给一个Task使用
+     */
     val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
     // 统计每个Worker的可用的CPU核数
     val availableCpus = shuffledOffers.map(o => o.cores).toArray
@@ -403,7 +436,7 @@ private[spark] class TaskSchedulerImpl(
       logDebug("parentName: %s, name: %s, runningTasks: %s".format(
         taskSet.parent.name, taskSet.name, taskSet.runningTasks))
       if (newExecAvail) {
-        // 重新计算TaskSet的本地性
+        // 通知有新的Executor添加了，以触发TaskSetManager重新计算TaskSet的本地性
         taskSet.executorAdded()
       }
     }
@@ -413,7 +446,7 @@ private[spark] class TaskSchedulerImpl(
     // NOTE: the preferredLocality order: PROCESS_LOCAL, NODE_LOCAL, NO_PREF, RACK_LOCAL, ANY
     /**
       * 遍历TaskSetManager，按照最大本地性的原则（即从高本地性级别到低本地性级别）
-      * 调用resourceOfferSingleTaskSet方法，给单个TaskSet中的Task提供资源
+      * 调用resourceOfferSingleTaskSet()方法，给单个TaskSet中的Task提供资源
       */
     for (taskSet <- sortedTaskSets) {
       var launchedAnyTask = false
@@ -421,7 +454,11 @@ private[spark] class TaskSchedulerImpl(
       // 按照最大本地性的原则，给Task提供资源
       for (currentMaxLocality <- taskSet.myLocalityLevels) {
         do {
-          // 分配资源
+          /**
+           * 调用resourceOfferSingleTaskSet()方法为单个TaskSet分配资源，
+           * 最终分配到资源的Task对应的TaskDescription会被放入到tasks数组中，
+           * 返回值表示是否有Task被分配了资源
+           */
           launchedTaskAtCurrentMaxLocality = resourceOfferSingleTaskSet(
             taskSet, currentMaxLocality, shuffledOffers, availableCpus, tasks)
           launchedAnyTask |= launchedTaskAtCurrentMaxLocality
@@ -437,11 +474,16 @@ private[spark] class TaskSchedulerImpl(
     if (tasks.size > 0) {
       hasLaunchedTask = true
     }
-    // 返回已经获得了资源的任务列表
+    // 返回已经获得了资源的TaskDescription列表
     return tasks
   }
 
-  // 更新Task的状态
+  /**
+   * 更新Task的状态
+   * @param tid Task的ID
+   * @param state Task的最新状态
+   * @param serializedData 序列化后的Task计算结果数据
+   */
   def statusUpdate(tid: Long, state: TaskState, serializedData: ByteBuffer) {
     var failedExecutor: Option[String] = None
     var reason: Option[ExecutorLossReason] = None
@@ -459,7 +501,12 @@ private[spark] class TaskSchedulerImpl(
               if (executorIdToRunningTaskIds.contains(execId)) { // 此Executor上正在运行Task
                 reason = Some(
                   SlaveLost(s"Task $tid was lost, so marking the executor as lost as well."))
-                // 移除Executor，移除的原因是SlaveLost
+                /**
+                 * 移除Executor，移除的原因是SlaveLost，
+                 * 需要注意的是，SlaveLost的第二个参数为false，表示不是因为Worker丢失而导致的，
+                 * Worker丢失与Executor丢失的区别在于，Executor丢失不会影响到计算结果数据，
+                 * 而Worker丢失会导致其上的计算产生的结果数据也会丢失，因此需要重新计算。
+                 */
                 removeExecutor(execId, reason.get)
                 failedExecutor = Some(execId)
               }
@@ -470,7 +517,7 @@ private[spark] class TaskSchedulerImpl(
               // 减少正在运行的任务数量
               taskSet.removeRunningTask(tid)
               if (state == TaskState.FINISHED) {
-                // 对执行成功的任务的结果进行处理
+                // 对执行成功的Task的结果进行处理
                 taskResultGetter.enqueueSuccessfulTask(taskSet, tid, serializedData)
               } else if (Set(TaskState.FAILED, TaskState.KILLED, TaskState.LOST).contains(state)) {
                 // 对执行失败的Task的结果进行处理
@@ -507,12 +554,18 @@ private[spark] class TaskSchedulerImpl(
    * Update metrics for in-progress tasks and let the master know that the BlockManager is still
    * alive. Return true if the driver knows about the given block manager. Otherwise, return false,
    * indicating that the block manager should re-register.
+   *
+   * @param execId Executor ID
+   * @param accumUpdates 元素类型为二元元组的数组，每个元组记录者Task和所属于该Task的相关累加器
+   * @param blockManagerId BlockManager的BlockManagerId
+   * @return 返回true表示Driver可以识别传入的BlockManager，否则说明不识别，需要该BlockManager进行重新注册
    */
   override def executorHeartbeatReceived(
       execId: String,
       accumUpdates: Array[(Long, Seq[AccumulatorV2[_, _]])],
       blockManagerId: BlockManagerId): Boolean = {
     // (taskId, stageId, stageAttemptId, accumUpdates)
+    // 更新Task相关的度量信息
     val accumUpdatesWithTaskIds: Array[(Long, Int, Int, Seq[AccumulableInfo])] = synchronized {
       accumUpdates.flatMap { case (id, updates) =>
         val accInfos = updates.map(acc => acc.toInfo(Some(acc.value), None))
@@ -521,6 +574,7 @@ private[spark] class TaskSchedulerImpl(
         }
       }
     }
+    // 通知DAGScheduler
     dagScheduler.executorHeartbeatReceived(execId, accumUpdatesWithTaskIds, blockManagerId)
   }
 
@@ -686,7 +740,7 @@ private[spark] class TaskSchedulerImpl(
     *
     * @param executorId
     * @param reason 有四种子类：
-    *                 - SlaveLost：Worker丢失。
+    *                 - SlaveLost：Worker或Executor丢失。
     *                 - LossReasonPending：未知的原因导致的Executor退出。
     *                 - ExecutorKilled：Executor被杀死了。
     *                 - ExecutorExited：Executor退出了。

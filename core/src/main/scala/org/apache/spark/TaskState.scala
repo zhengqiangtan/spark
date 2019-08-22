@@ -19,13 +19,17 @@ package org.apache.spark
 
 private[spark] object TaskState extends Enumeration {
 
+  // 启动中，运行中，已结束，已失败，已被杀死，已丢失
   val LAUNCHING, RUNNING, FINISHED, FAILED, KILLED, LOST = Value
 
+  // 结束状态，可以是已结束、已失败、已被杀死、已丢失任意一种
   private val FINISHED_STATES = Set(FINISHED, FAILED, KILLED, LOST)
 
   type TaskState = Value
 
+  // 判断是否是已失败，LOST和FAILED都属于失败
   def isFailed(state: TaskState): Boolean = (LOST == state) || (FAILED == state)
 
+  // 判断是否是已结束，FINISHED、FAILED、KILLED、LOST都属于已结束
   def isFinished(state: TaskState): Boolean = FINISHED_STATES.contains(state)
 }

@@ -31,8 +31,8 @@ import org.apache.spark.util.{LongAccumulator, ThreadUtils, Utils}
 
 /**
  * Runs a thread pool that deserializes and remotely fetches (if necessary) task results.
-  *
-  * 用于对序列化的Task执行结果进行反序列化，以得到Task执行结果。TaskResultGetter也可远程获取Task执行结果。
+ *
+ * 用于对序列化的Task执行结果进行反序列化，以得到Task执行结果。TaskResultGetter也可远程获取Task执行结果。
  */
 private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedulerImpl)
   extends Logging {
@@ -72,6 +72,7 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
           // 对Task的执行结果反序列化，根据序列化结果区别处理
           val (result, size) = serializer.get().deserialize[TaskResult[_]](serializedData) match {
             case directResult: DirectTaskResult[_] => // Task的执行结果保存在DirectTaskResult中
+              // 判断结果数据是否超过限制，默认最大为1G
               if (!taskSetManager.canFetchMoreResults(serializedData.limit())) {
                 return
               }
@@ -81,7 +82,8 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
               // 此时只需要对DirectTaskResult保存的数据（即DirectTaskResult的valueBytes属性）进行反序列化就可以得到。
               directResult.value(taskResultSerializer.get())
               (directResult, serializedData.limit())
-            case IndirectTaskResult(blockId, size) => // Task的执行结果没有保存在IndirectTaskResult中
+            case IndirectTaskResult(blockId, size) => // Task的执行结果保存在IndirectTaskResult中
+              // 判断结果数据是否超过限制，默认最大为1G
               if (!taskSetManager.canFetchMoreResults(size)) {
                 // dropped by executor if size is larger than maxResultSize
                 sparkEnv.blockManager.master.removeBlock(blockId)
@@ -93,7 +95,10 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
                 * 向DAGSchedulerEventProcessLoop投递GettingResultEvent事件，
                 */
               scheduler.handleTaskGettingResult(taskSetManager, tid)
-              // 调用BlockManager的getRemoteBytes方法，从运行Task的节点上下载Block
+              /**
+               * IndirectTaskResult结果与DirectTaskResult，它没有携带真正的数据，
+               * 需要调用BlockManager的getRemoteBytes()方法，从运行Task的节点上下载Block
+               */
               val serializedTaskResult = sparkEnv.blockManager.getRemoteBytes(blockId)
               if (!serializedTaskResult.isDefined) {
                 /* We won't be able to get the task result if the machine that ran the task failed
@@ -147,6 +152,7 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
     serializedData: ByteBuffer) {
     var reason : TaskFailedReason = UnknownReason
     try {
+      // 提交获取结果的任务
       getTaskResultExecutor.execute(new Runnable {
         override def run(): Unit = Utils.logUncaughtExceptions {
           val loader = Utils.getContextOrSparkClassLoader
