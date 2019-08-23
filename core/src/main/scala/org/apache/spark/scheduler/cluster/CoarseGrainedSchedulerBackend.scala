@@ -368,7 +368,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
             }
           }
         }
-        else { // 序列化后的TaskDescription的大小小于RPC消息大小的最大值maxRpcMessage-Size
+        else { // 序列化后的TaskDescription的大小小于RPC消息大小的最大值maxRpcMessageSize
           val executorData = executorDataMap(task.executorId)
           // 减少Executor的空闲内核数freeCores
           executorData.freeCores -= scheduler.CPUS_PER_TASK

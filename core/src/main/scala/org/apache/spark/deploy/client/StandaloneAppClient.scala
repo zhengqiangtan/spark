@@ -38,27 +38,27 @@ import org.apache.spark.util.{RpcUtils, ThreadUtils}
  *
  * Takes a master URL, an app description, and a listener for cluster events, and calls
  * back the listener when various events occur.
-  *
-  * StandaloneAppClient是在Standalone模式下，Application与集群管理器进行对话的客户端。
-  * 最为核心的功能是向集群管理器请求或杀死Executor。
  *
-  * @param rpcEnv
-  * @param masterUrls Each url should look like spark://host:port.
-  *                   用于缓存每个Master的spark：//host：port格式的URL的数组。
-  * @param appDescription Application的描述信息（ApplicationDescription）。Application-Description中记录了如下信息：
-  *                       - Application的名称（name）
-  *                       - Application需要的最大内核数（maxCores）
-  *                       - 每个Executor所需要的内存大小（memoryPerExecutorMB）
-  *                       - 运行CoarseGrainedExecutorBackend进程的命令（command）
-  *                       - Spark UI的URL（appUiUrl）、事件日志的路径（eventLogDir）
-  *                       - 事件日志采用的压缩算法名（eventLogCodec）
-  *                       - 每个Executor所需的内核数（coresPerExecutor）
-  *                       - 提交Application的用户名（user）
-  * @param listener 对集群事件的监听器。Standalone-AppClientListener有两个实现类，分别是StandaloneSchedulerBackend和AppClientCollector。
-  *                 AppClientCollector只用于测试，StandaloneSchedulerBackend可用在local-cluster或Standalone模式下。
-  *                 StandaloneSchedulerBackend在构造StandaloneAppClient时会将自身作为listener参数。
-  * @param conf
-  */
+ * StandaloneAppClient是在Standalone模式下，Application与集群管理器进行对话的客户端。
+ * 最为核心的功能是向集群管理器请求或杀死Executor。
+ *
+ * @param rpcEnv
+ * @param masterUrls     Each url should look like spark://host:port.
+ *                       用于缓存每个Master的spark：//host：port格式的URL的数组。
+ * @param appDescription Application的描述信息（ApplicationDescription）。Application-Description中记录了如下信息：
+ *                       - Application的名称（name）
+ *                       - Application需要的最大内核数（maxCores）
+ *                       - 每个Executor所需要的内存大小（memoryPerExecutorMB）
+ *                       - 运行CoarseGrainedExecutorBackend进程的命令（command）
+ *                       - Spark UI的URL（appUiUrl）、事件日志的路径（eventLogDir）
+ *                       - 事件日志采用的压缩算法名（eventLogCodec）
+ *                       - 每个Executor所需的内核数（coresPerExecutor）
+ *                       - 提交Application的用户名（user）
+ * @param listener       对集群事件的监听器。Standalone-AppClientListener有两个实现类，分别是StandaloneSchedulerBackend和AppClientCollector。
+ *                       AppClientCollector只用于测试，StandaloneSchedulerBackend可用在local-cluster或Standalone模式下。
+ *                       StandaloneSchedulerBackend在构造StandaloneAppClient时会将自身作为listener参数。
+ * @param conf
+ */
 private[spark] class StandaloneAppClient(
     rpcEnv: RpcEnv,
     masterUrls: Array[String],
@@ -83,9 +83,9 @@ private[spark] class StandaloneAppClient(
   private val registered = new AtomicBoolean(false)
 
   /**
-    * ClientEndpoint继承自ThreadSafeRpcEndpoint，也是StandaloneAppClient的内部类，
-    * StandaloneAppClient依赖于ClientEndpoint与集群管理器进行通信。
-    */
+   * ClientEndpoint继承自ThreadSafeRpcEndpoint，也是StandaloneAppClient的内部类，
+   * StandaloneAppClient依赖于ClientEndpoint与集群管理器进行通信。
+   */
   private class ClientEndpoint(override val rpcEnv: RpcEnv) extends ThreadSafeRpcEndpoint
     with Logging {
 
@@ -137,8 +137,8 @@ private[spark] class StandaloneAppClient(
     }
 
     /**
-     *  Register with all masters asynchronously and returns an array `Future`s for cancellation.
-      *  向所有的Master尝试注册Application，并将返回的Future
+     * Register with all masters asynchronously and returns an array `Future`s for cancellation.
+     * 向所有的Master尝试注册Application，并将返回的Future
      */
     private def tryRegisterAllMasters(): Array[JFuture[_]] = {
       // 遍历所有的Master的RpcAddress
@@ -171,13 +171,17 @@ private[spark] class StandaloneAppClient(
      * Once we connect to a master successfully, all scheduling work and Futures will be cancelled.
      *
      * nthRetry means this is the nth attempt to register with master.
-      *
-      * 用于向Master注册Application
+     *
+     * 用于向Master注册Application
      */
     private def registerWithMaster(nthRetry: Int) {
       // tryRegisterAllMasters()向所有的Master尝试注册Application，将返回的Future保存到registerMasterFutures
       registerMasterFutures.set(tryRegisterAllMasters())
-      // 提交定时调度
+
+      /**
+       * 提交定时调度，每隔REGISTRATION_TIMEOUT_SECONDS的间隔（默认为20秒）进行一次调度，
+       * 失败重试最多会进行REGISTRATION_RETRIES次（默认为3次）
+       */
       registrationRetryTimer.set(registrationRetryThread.schedule(new Runnable {
         override def run(): Unit = {
           if (registered.get) { // 如果已经注册成功，那么取消向Master注册Application
@@ -277,7 +281,7 @@ private[spark] class StandaloneAppClient(
         // 停止RpcEndpoint
         stop()
 
-      // 处理请求Executor消息
+      // 处理请求RequestExecutors消息
       case r: RequestExecutors =>
         master match {
           // 将消息转发给Master
@@ -312,13 +316,16 @@ private[spark] class StandaloneAppClient(
     }
 
     override def onDisconnected(address: RpcAddress): Unit = {
+      // 传入的地址是Master的地址，需要验证是否是本地记录的Master的地址
       if (master.exists(_.address == address)) {
         logWarning(s"Connection to $address failed; waiting for master to reconnect...")
+        // 标记当前连接已断开
         markDisconnected()
       }
     }
 
     override def onNetworkError(cause: Throwable, address: RpcAddress): Unit = {
+      // 判断是否是有效的Master地址
       if (isPossibleMaster(address)) {
         logWarning(s"Could not connect to $address: $cause")
       }
@@ -383,8 +390,8 @@ private[spark] class StandaloneAppClient(
   /**
    * Request executors from the Master by specifying the total number desired,
    * including existing pending and running executors.
-    *
-    * 用于向Master请求所需的所有Executor资源。
+   *
+   * 用于向Master请求所需的所有Executor资源。
    *
    * @return whether the request is acknowledged.
    */
@@ -401,9 +408,9 @@ private[spark] class StandaloneAppClient(
 
   /**
    * Kill the given list of executors through the Master.
-    *
-    * 用于向Master请求杀死Executor。
-    *
+   *
+   * 用于向Master请求杀死Executor。
+   *
    * @return whether the kill request is acknowledged.
    */
   def killExecutors(executorIds: Seq[String]): Future[Boolean] = {

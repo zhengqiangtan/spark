@@ -353,10 +353,10 @@ private[deploy] class Master(
       System.exit(0)
 
     /**
-      * Driver在启动后需要向Master注册Application信息，
-      * 这样Master就能将Worker上的资源及Executor分配给Driver。
-      * Driver通过向Master发送RegisterApplication消息来注册Application信息。
-      */
+     * Driver在启动后需要向Master注册Application信息，
+     * 这样Master就能将Worker上的资源及Executor分配给Driver。
+     * Driver通过向Master发送RegisterApplication消息来注册Application信息。
+     */
     case RegisterApplication(description, driver) =>
       // TODO Prevent repeated registrations from some driver
       if (state == RecoveryState.STANDBY) {
@@ -366,9 +366,9 @@ private[deploy] class Master(
         // Master的状态不是STANDBY
         logInfo("Registering app " + description.name)
         /**
-          * 创建ApplicationInfo，会给Application分配ID。
-          * 此ID的生成规则为app-${yyyyMMddHHmmss}-${nextAppNumber}。
-          */
+         * 创建ApplicationInfo，会给Application分配ID。
+         * 此ID的生成规则为app-${yyyyMMddHHmmss}-${nextAppNumber}。
+         */
         val app = createApplication(description, driver)
         // 注册ApplicationInfo
         registerApplication(app)
@@ -377,11 +377,11 @@ private[deploy] class Master(
         persistenceEngine.addApplication(app)
 
         /**
-          * 发送RegisteredApplication消息，以表示注册Application信息成功。
-          * 该消息将携带如下信息：
-          * - 为Application生成的ID
-          * - Master自身的RpcEndpointRef
-          */
+         * 发送RegisteredApplication消息，以表示注册Application信息成功。
+         * 该消息将携带如下信息：
+         * - 为Application生成的ID
+         * - Master自身的RpcEndpointRef
+         */
         driver.send(RegisteredApplication(app.id, self))
         // 进行资源调度
         schedule()
