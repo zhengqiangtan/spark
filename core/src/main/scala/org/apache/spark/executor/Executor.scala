@@ -47,12 +47,12 @@ import org.apache.spark.util.io.ChunkedByteBuffer
  * An internal RPC interface is used for communication with the driver,
  * except in the case of Mesos fine-grained mode.
  *
-  * @param executorId Executor的身份标识
-  * @param executorHostname 当前Executor所在的主机名
-  * @param env SparkEnv
-  * @param userClassPath 用户指定的类路径。可通过spark.executor.extraClassPath属性进行配置。如果有多个类路径，可以在配置时用英文逗号分隔。
-  * @param isLocal 是否是Local部署模式
-  */
+ * @param executorId       Executor的身份标识
+ * @param executorHostname 当前Executor所在的主机名
+ * @param env              SparkEnv
+ * @param userClassPath    用户指定的类路径。可通过spark.executor.extraClassPath属性进行配置。如果有多个类路径，可以在配置时用英文逗号分隔。
+ * @param isLocal          是否是Local部署模式
+ */
 private[spark] class Executor(
     executorId: String,
     executorHostname: String,
@@ -78,7 +78,7 @@ private[spark] class Executor(
   // No ip or host:port - just hostname
   Utils.checkHost(executorHostname, "Expected executed slave to be a hostname")
   // must not have port specified.
-  assert (0 == Utils.parseHostPort(executorHostname)._2)
+  assert(0 == Utils.parseHostPort(executorHostname)._2)
 
   // Make sure the local hostname we report matches the cluster scheduler's name for this host
   Utils.setCustomHostname(executorHostname)
@@ -91,7 +91,10 @@ private[spark] class Executor(
   }
 
   // Start worker thread pool
-  // 线程池，运行的线程将以Executor task launch worker作为前缀
+  /**
+   * 线程池，运行的线程将以Executor task launch worker作为前缀，
+   * 是可缓存线程池，如果线程池长度超过处理需要，可灵活回收空闲线程，若无可回收，则新建线程。
+   */
   private val threadPool = ThreadUtils.newDaemonCachedThreadPool("Executor task launch worker")
   // Executor的度量来源
   private val executorSource = new ExecutorSource(threadPool, executorId)
@@ -103,14 +106,20 @@ private[spark] class Executor(
   }
 
   // Whether to load classes in user jars before those in Spark jars
-  // 是否首先从用户指定的类路径中加载类，然后再去Spark的Jar文件中加载。可通过spark.executor.userClassPathFirst属性配置，默认为false。
+  /**
+   * 是否首先从用户指定的类路径中加载类，然后再去Spark的Jar文件中加载。
+   * 可通过spark.executor.userClassPathFirst属性配置，默认为false。
+   */
   private val userClassPathFirst = conf.getBoolean("spark.executor.userClassPathFirst", false)
 
   // Create our ClassLoader
   // do this after SparkEnv creation so can access the SecurityManager
   // Task需要的类加载器
   private val urlClassLoader = createClassLoader()
-  // 当使用交互式解释器环境（Read-Evaluate-Print-Loop，简称REPL）时，此类加载器用于加载REPL根据用户键入的代码定义的新类型。
+  /**
+   * 当使用交互式解释器环境（Read-Evaluate-Print-Loop，简称REPL）时，
+   * 此类加载器用于加载REPL根据用户键入的代码定义的新类型。
+   */
   private val replClassLoader = addReplClassLoaderIfNeeded(urlClassLoader)
 
   // Set the classloader for serializer
@@ -119,20 +128,20 @@ private[spark] class Executor(
   // Max size of direct result. If task result is bigger than this, we use the block manager
   // to send the result back.
   /**
-    * 直接结果的最大大小。取spark.task.maxDirectResultSize属性（默认为1L<<20，即1048576）
-    * 与spark.rpc.message.maxSize属性（默认为128MB）之间的最小值。
-    */
+   * 直接结果的最大大小。取spark.task.maxDirectResultSize属性（默认为1L<<20，即1048576）
+   * 与spark.rpc.message.maxSize属性（默认为128MB）之间的最小值。
+   */
   private val maxDirectResultSize = Math.min(
     conf.getSizeAsBytes("spark.task.maxDirectResultSize", 1L << 20),
     RpcUtils.maxMessageSizeBytes(conf))
 
   // Limit of bytes for total size of results (default is 1GB)
   /**
-    * 结果的最大限制。默认为1GB。
-    * Task运行的结果如果超过maxResultSize，则会被删除。
-    * Task运行的结果如果小于等于maxResultSize且大于maxDirectResultSize，则会写入本地存储体系。
-    * Task运行的结果如果小于等于maxDirectResultSize，则会直接返回给Driver。
-    */
+   * 结果的最大限制。默认为1GB。
+   * Task运行的结果如果超过maxResultSize，则会被删除。
+   * Task运行的结果如果小于等于maxResultSize且大于maxDirectResultSize，则会写入本地存储体系。
+   * Task运行的结果如果小于等于maxDirectResultSize，则会直接返回给Driver。
+   */
   private val maxResultSize = Utils.getMaxResultSize(conf)
 
   // Maintains the list of running tasks.
@@ -146,22 +155,22 @@ private[spark] class Executor(
   // must be initialized before running startDriverHeartbeat()
   // HeartbeatReceiver的RpcEndpointRef
   private val heartbeatReceiverRef =
-    RpcUtils.makeDriverRef(HeartbeatReceiver.ENDPOINT_NAME, conf, env.rpcEnv)
+  RpcUtils.makeDriverRef(HeartbeatReceiver.ENDPOINT_NAME, conf, env.rpcEnv)
 
   /**
    * When an executor is unable to send heartbeats to the driver more than `HEARTBEAT_MAX_FAILURES`
    * times, it should kill itself. The default value is 60. It means we will retry to send
    * heartbeats about 10 minutes because the heartbeat interval is 10s.
-    *
-    * 心跳的最大失败次数。可通过spark.executor.heart-beat.maxFailures属性配置，默认为60。
+   *
+   * 心跳的最大失败次数。可通过spark.executor.heartbeat.maxFailures属性配置，默认为60。
    */
   private val HEARTBEAT_MAX_FAILURES = conf.getInt("spark.executor.heartbeat.maxFailures", 60)
 
   /**
    * Count the failure times of heartbeat. It should only be accessed in the heartbeat thread. Each
    * successful heartbeat will reset it to 0.
-    *
-    * 心跳失败数的计数器，初始值为0。
+   *
+   * 心跳失败数的计数器，初始值为0。
    */
   private var heartbeatFailures = 0
 
@@ -184,8 +193,10 @@ private[spark] class Executor(
   }
 
   def killTask(taskId: Long, interruptThread: Boolean): Unit = {
+    // 根据Task ID获取具体的TaskRUnner
     val tr = runningTasks.get(taskId)
     if (tr != null) {
+      // 调用TaskRunner的kill()方法终止Task
       tr.kill(interruptThread)
     }
   }
@@ -198,8 +209,10 @@ private[spark] class Executor(
    */
   def killAllTasks(interruptThread: Boolean) : Unit = {
     // kill all the running tasks
+    // 遍历所有的TaskRunner
     for (taskRunner <- runningTasks.values().asScala) {
       if (taskRunner != null) {
+        // 调用TaskRunner的kill()方法终止Task
         taskRunner.kill(interruptThread)
       }
     }
@@ -221,18 +234,19 @@ private[spark] class Executor(
   }
 
   /**
-    * TaskRunner实现了Runnable接口，作为线程要执行的任务。
-    * @param execBackend 类型为ExecutorBackend。
-    *                    SchedulerBackend有CoarseGrainedSchedulerBackend和LocalSchedulerBackend两个子类。
-    *                    由于LocalSchedulerBackend也继承了特质ExecutorBackend，并实现了其唯一的方法statusUpdate()，
-    *                    所以local部署模式下将LocalSchedulerBackend作为ExecutorBackend。
-    *                    其他部署模式使用特质ExecutorBackend的另一个实现类Coarse-GrainedExecutorBackend，
-    *                    来跟CoarseGrainedSchedulerBackend配合。
-    * @param taskId Task的身份标识
-    * @param attemptNumber
-    * @param taskName Task的名称
-    * @param serializedTask 序列化后的Task
-    */
+   * TaskRunner实现了Runnable接口，作为线程要执行的任务。
+   *
+   * @param execBackend    类型为ExecutorBackend。
+   *                       SchedulerBackend有CoarseGrainedSchedulerBackend和LocalSchedulerBackend两个子类。
+   *                       由于LocalSchedulerBackend也继承了特质ExecutorBackend，并实现了其唯一的方法statusUpdate()，
+   *                       所以local部署模式下将LocalSchedulerBackend作为ExecutorBackend。
+   *                       其他部署模式使用特质ExecutorBackend的另一个实现类Coarse-GrainedExecutorBackend，
+   *                       来跟CoarseGrainedSchedulerBackend配合。
+   * @param taskId         Task的身份标识
+   * @param attemptNumber
+   * @param taskName       Task的名称
+   * @param serializedTask 序列化后的Task
+   */
   class TaskRunner(
       execBackend: ExecutorBackend,
       val taskId: Long,
@@ -267,10 +281,12 @@ private[spark] class Executor(
 
     def kill(interruptThread: Boolean): Unit = {
       logInfo(s"Executor is trying to kill $taskName (TID $taskId)")
+      // 设置标记为true
       killed = true
       if (task != null) {
         synchronized {
           if (!finished) {
+            // 调用Task的kill()方法处理
             task.kill(interruptThread)
           }
         }
@@ -316,7 +332,7 @@ private[spark] class Executor(
           * 对序列化的Task进行反序列化，得到：
           * - taskFiles：任务所需的文件（taskFiles）
           * - taskJars：任务所需的Jar包（taskJars）
-          * - taskProps：Task所需的属性信息（task-Props）
+          * - taskProps：Task所需的属性信息（taskProps）
           * - taskBytes：任务本身（taskBytes）。
           */
         val (taskFiles, taskJars, taskProps, taskBytes) =
@@ -431,12 +447,13 @@ private[spark] class Executor(
 
         // Note: accumulator updates must be collected after TaskMetrics is updated
         val accumUpdates = task.collectAccumulatorUpdates()
+
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>> 6. 将执行结果发送给Driver >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
         // TODO: do not serialize value twice
         val directResult = new DirectTaskResult(valueBytes, accumUpdates)
         val serializedDirectResult = ser.serialize(directResult)
         val resultSize = serializedDirectResult.limit
-
-        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>> 6. 将执行结果发送给Driver >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
         // directSend = sending directly back to the driver
         val serializedResult: ByteBuffer = {
@@ -549,17 +566,22 @@ private[spark] class Executor(
   private def createClassLoader(): MutableURLClassLoader = {
     // Bootstrap the list of jars with the user class path.
     val now = System.currentTimeMillis()
+    // 更新currentJars字点中每个Jar包对应的时间戳记录
     userClassPath.foreach { url =>
       currentJars(url.getPath().split("/").last) = now
     }
 
+    // 获取Spark的ClassLoader
     val currentLoader = Utils.getContextOrSparkClassLoader
 
     // For each of the jars in the jarSet, add them to the class loader.
     // We assume each of the files has already been fetched.
+    // 获取Jar包的文件
     val urls = userClassPath.toArray ++ currentJars.keySet.map { uri =>
       new File(uri.split("/").last).toURI.toURL
     }
+
+    // 根据userClassPathFirst决定使用哪种加载方式
     if (userClassPathFirst) {
       new ChildFirstURLClassLoader(urls, currentLoader)
     } else {
@@ -572,15 +594,19 @@ private[spark] class Executor(
    * new classes defined by the REPL as the user types code
    */
   private def addReplClassLoaderIfNeeded(parent: ClassLoader): ClassLoader = {
+    // 获取REPL类的URI
     val classUri = conf.get("spark.repl.class.uri", null)
     if (classUri != null) {
       logInfo("Using REPL class URI: " + classUri)
       try {
         val _userClassPathFirst: java.lang.Boolean = userClassPathFirst
+        // 加载REPL使用的ExecutorClassLoader类加载器
         val klass = Utils.classForName("org.apache.spark.repl.ExecutorClassLoader")
           .asInstanceOf[Class[_ <: ClassLoader]]
+        // 获取构造方法
         val constructor = klass.getConstructor(classOf[SparkConf], classOf[SparkEnv],
           classOf[String], classOf[ClassLoader], classOf[Boolean])
+        // 创建ExecutorClassLoader并返回
         constructor.newInstance(conf, env, classUri, parent, _userClassPathFirst)
       } catch {
         case _: ClassNotFoundException =>
@@ -596,8 +622,11 @@ private[spark] class Executor(
   /**
    * Download any missing dependencies if we receive a new set of files and JARs from the
    * SparkContext. Also adds any new JARs we fetched to the class loader.
+   *
+   * 该方法会下载所有依赖的Jar包和文件，同时通过类加载器添加新的依赖Jar包
    */
   private def updateDependencies(newFiles: HashMap[String, Long], newJars: HashMap[String, Long]) {
+    // 获取Hadoop的Configuration实例
     lazy val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
     synchronized {
       // Fetch missing dependencies
@@ -639,8 +668,8 @@ private[spark] class Executor(
   }
 
   /** Reports heartbeat and metrics for active tasks to the driver.
-    * 报告心跳的任务具体实现方法
-    **/
+   * 报告心跳的任务具体实现方法
+   */
   private def reportHeartBeat(): Unit = {
     // list of (task id, accumUpdates) to send back to the driver
     val accumUpdates = new ArrayBuffer[(Long, Seq[AccumulatorV2[_, _]])]()
@@ -684,8 +713,8 @@ private[spark] class Executor(
 
   /**
    * Schedules a task to report heartbeat and partial metrics for active tasks to driver.
-    *
-    * 在初始化Executor的过程中，Executor会调用该方法启动心跳报告的定时任务。
+   *
+   * 在初始化Executor的过程中，Executor会调用该方法启动心跳报告的定时任务。
    */
   private def startDriverHeartbeater(): Unit = {
     // 获取发送心跳报告的时间间隔intervalMs。intervalMs可通过spark.executor.heartbeatInterval属性配置，默认为10s。

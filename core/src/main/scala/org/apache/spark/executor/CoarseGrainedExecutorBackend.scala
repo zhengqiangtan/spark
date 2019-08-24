@@ -37,18 +37,18 @@ import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.{ThreadUtils, Utils}
 
 /**
-  * CoarseGrainedExecutorBackend是Driver与Executor通信的后端接口，但只在local-cluster和Standalone模式下才会使用。
-  * 由于CoarseGrainedExecutorBackend作为单独的进程存在，所以CoarseGrainedExecutorBackend的伴生对象中实现了main()方法。
-  * 在main()方法中将创建CoarseGrainedExecutorBackend实例。
-  *
-  * @param rpcEnv
-  * @param driverUrl Driver的Spark格式的URL。例如，spark://CoarseGrainedScheduler@host:port。
-  * @param executorId Master分配给Executor的身份标识
-  * @param hostname 主机名
-  * @param cores 分配给Executor的内核数
-  * @param userClassPath 用户指定的类路径
-  * @param env Executor所需的SparkEnv
-  */
+ * CoarseGrainedExecutorBackend是Driver与Executor通信的后端接口，但只在local-cluster和Standalone模式下才会使用。
+ * 由于CoarseGrainedExecutorBackend作为单独的进程存在，所以CoarseGrainedExecutorBackend的伴生对象中实现了main()方法。
+ * 在main()方法中将创建CoarseGrainedExecutorBackend实例。
+ *
+ * @param rpcEnv
+ * @param driverUrl     Driver的Spark格式的URL。例如，spark://CoarseGrainedScheduler@host:port。
+ * @param executorId    Master分配给Executor的身份标识
+ * @param hostname      主机名
+ * @param cores         分配给Executor的内核数
+ * @param userClassPath 用户指定的类路径
+ * @param env           Executor所需的SparkEnv
+ */
 private[spark] class CoarseGrainedExecutorBackend(
     override val rpcEnv: RpcEnv,
     driverUrl: String,
@@ -72,15 +72,16 @@ private[spark] class CoarseGrainedExecutorBackend(
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
 
   /**
-    * 在创建CoarseGrainedExecutorBackend时，并将它注册到Executor自身的RpcEnv中。
-    * 在注册到RpcEnv的过程中会触发对CoarseGrainedExecutorBackend的onStart()方法的调用。
-    */
+   * 在创建CoarseGrainedExecutorBackend时，并将它注册到Executor自身的RpcEnv中。
+   * 在注册到RpcEnv的过程中会触发对CoarseGrainedExecutorBackend的onStart()方法的调用。
+   */
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
+    // 获取Driver的RpcEndpoint的RpcEndpointRef
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
-      // 向DriverEndpoint发送RegisterExecutor消息注册Executor
+      // 向Driver的RpcEndpoint发送RegisterExecutor消息注册Executor
       ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, cores, extractLogUrls))
     }(ThreadUtils.sameThread).onComplete {
       // This is a very fast action so we can use "ThreadUtils.sameThread"
@@ -99,9 +100,11 @@ private[spark] class CoarseGrainedExecutorBackend(
 
   // 接收消息，对RegisteredExecutor、LaunchTask、KillTask、StopExecutor等消息进行处理
   override def receive: PartialFunction[Any, Unit] = {
+    // DriverEndpoint回复RegisteredExecutor，表示Executor注册成功
     case RegisteredExecutor =>
       logInfo("Successfully registered with driver")
       try {
+        // 创建Executor实例，并由executor字段持有
         executor = new Executor(executorId, hostname, env, userClassPath, isLocal = false)
       } catch {
         case NonFatal(e) =>
@@ -112,19 +115,25 @@ private[spark] class CoarseGrainedExecutorBackend(
       exitExecutor(1, "Slave registration failed: " + message)
 
     case LaunchTask(data) =>
-      if (executor == null) {
+      // 判断Executor是否被创建了
+      if (executor == null) { // Executor还未创建
+        // 告诉DriverExecutor丢失
         exitExecutor(1, "Received LaunchTask command but executor was null")
-      } else {
+      } else { // Executor创建成功
+        // 反序列化Task的TaskDescription数据
         val taskDesc = ser.deserialize[TaskDescription](data.value)
         logInfo("Got assigned task " + taskDesc.taskId)
+        // 调用Executor的launchTask()方法启动Task
         executor.launchTask(this, taskId = taskDesc.taskId, attemptNumber = taskDesc.attemptNumber,
           taskDesc.name, taskDesc.serializedTask)
       }
 
     case KillTask(taskId, _, interruptThread) =>
       if (executor == null) {
+        // 如果Executor为空，告诉DriverEndpoint移除Executor，退出当前进程
         exitExecutor(1, "Received KillTask command but executor was null")
       } else {
+        // 否则通知Executor杀死该Task
         executor.killTask(taskId, interruptThread)
       }
 
@@ -135,23 +144,27 @@ private[spark] class CoarseGrainedExecutorBackend(
       // a message to self to actually do the shutdown.
       self.send(Shutdown)
 
-    case Shutdown =>
-      stopping.set(true)
-      new Thread("CoarseGrainedExecutorBackend-stop-executor") {
-        override def run(): Unit = {
-          // executor.stop() will call `SparkEnv.stop()` which waits until RpcEnv stops totally.
-          // However, if `executor.stop()` runs in some thread of RpcEnv, RpcEnv won't be able to
-          // stop until `executor.stop()` returns, which becomes a dead-lock (See SPARK-14180).
-          // Therefore, we put this line in a new thread.
-          executor.stop()
-        }
-      }.start()
+  case Shutdown =>
+    // 设置停止标记为true
+    stopping.set(true)
+    // 启动一个线程停止Executor
+    new Thread("CoarseGrainedExecutorBackend-stop-executor") {
+      override def run(): Unit = {
+        // executor.stop() will call `SparkEnv.stop()` which waits until RpcEnv stops totally.
+        // However, if `executor.stop()` runs in some thread of RpcEnv, RpcEnv won't be able to
+        // stop until `executor.stop()` returns, which becomes a dead-lock (See SPARK-14180).
+        // Therefore, we put this line in a new thread.
+        executor.stop()
+      }
+    }.start()
   }
 
+  // 当有连接与当前RpcEndpoint断开时被调用
   override def onDisconnected(remoteAddress: RpcAddress): Unit = {
     if (stopping.get()) {
       logInfo(s"Driver from $remoteAddress disconnected during shutdown")
     } else if (driver.exists(_.address == remoteAddress)) {
+      // 如果是Driver与该RpcEndpoint断开连接，说明该Executor已经无用了，需要退出当前进程
       exitExecutor(1, s"Driver $remoteAddress disassociated! Shutting down.", null,
         notifyDriver = false)
     } else {
@@ -160,12 +173,14 @@ private[spark] class CoarseGrainedExecutorBackend(
   }
 
   /**
-    * 在Standalone模式下，由于CoarseGrainedExecutorBackend与Executor在同一个进程内，所以它对Task的状态能够准确实时地捕获。
-    * 利用这一优势，CoarseGrainedExecutorBackend可以将Task的状态发送给DriverEndpoint，以便对Task的状态进行更新。
-    */
+   * 在Standalone模式下，由于CoarseGrainedExecutorBackend与Executor在同一个进程内，所以它对Task的状态能够准确实时地捕获。
+   * 利用这一优势，CoarseGrainedExecutorBackend可以将Task的状态发送给DriverEndpoint，以便对Task的状态进行更新。
+   */
   override def statusUpdate(taskId: Long, state: TaskState, data: ByteBuffer) {
+    // 构造StatusUpdate消息
     val msg = StatusUpdate(executorId, taskId, state, data)
     driver match {
+        // 发送给DriverEndpoint
       case Some(driverRef) => driverRef.send(msg)
       case None => logWarning(s"Drop $msg because has not yet connected to driver")
     }
@@ -180,6 +195,7 @@ private[spark] class CoarseGrainedExecutorBackend(
                              reason: String,
                              throwable: Throwable = null,
                              notifyDriver: Boolean = true) = {
+    // 处理日志
     val message = "Executor self-exiting due to : " + reason
     if (throwable != null) {
       logError(message, throwable)
@@ -187,14 +203,16 @@ private[spark] class CoarseGrainedExecutorBackend(
       logError(message)
     }
 
+    // 判断是否需要通知Driver
     if (notifyDriver && driver.nonEmpty) {
+      // 向Driver发送RemoveExecutor消息
       driver.get.ask[Boolean](
         RemoveExecutor(executorId, new ExecutorLossReason(reason))
       ).onFailure { case e =>
         logWarning(s"Unable to notify the driver due to " + e.getMessage, e)
       }(ThreadUtils.sameThread)
     }
-
+    // 直接退出
     System.exit(code)
   }
 }

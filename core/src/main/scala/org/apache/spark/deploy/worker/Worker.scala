@@ -603,14 +603,14 @@ private[deploy] class Worker(
       registerWithMaster()
 
     /**
-      * Master向Worker发送LaunchExecutor消息以运行Executor，该消息携带了以下信息：
-      * - masterUrl
-      * - Application的ID
-      * - Executor的ID
-      * - 应用的描述信息
-      * - Executor分配获得的内核数
-      * - Executor分配获得的内存大小
-      */
+     * Master向Worker发送LaunchExecutor消息以运行Executor，该消息携带了以下信息：
+     * - masterUrl
+     * - Application的ID
+     * - Executor的ID
+     * - 应用的描述信息
+     * - Executor分配获得的内核数
+     * - Executor分配获得的内存大小
+     */
     case LaunchExecutor(masterUrl, appId, execId, appDesc, cores_, memory_) =>
       // 判断发送LaunchExecutor消息的Master是否是激活的Master
       if (masterUrl != activeMasterUrl) {

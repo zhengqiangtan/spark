@@ -25,6 +25,7 @@ import org.apache.spark.TaskState.TaskState
  * A pluggable interface used by the Executor to send updates to the cluster scheduler.
  */
 private[spark] trait ExecutorBackend {
+  // Task发生变化时需要调用该方法
   def statusUpdate(taskId: Long, state: TaskState, data: ByteBuffer): Unit
 }
 
