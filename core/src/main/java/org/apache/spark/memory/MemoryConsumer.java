@@ -128,7 +128,7 @@ public abstract class MemoryConsumer {
   /**
    * Frees a LongArray.
    *
-   * 用于释放长整型数组。
+   * 用于释放LongArray对象中封装的长整型数组所占用的内存
    */
   public void freeArray(LongArray array) {
     freePage(array.memoryBlock());
@@ -142,29 +142,34 @@ public abstract class MemoryConsumer {
    * @throws OutOfMemoryError
    */
   protected MemoryBlock allocatePage(long required) {
+    // 使用TaskMemoryManager的allocatePage()方法申请
     MemoryBlock page = taskMemoryManager.allocatePage(Math.max(pageSize, required), this);
+    // 判断申请是否足够
     if (page == null || page.size() < required) {
       long got = 0;
       if (page != null) {
         got = page.size();
+        // 申请不足，释放已申请的大小
         taskMemoryManager.freePage(page, this);
       }
       taskMemoryManager.showMemoryUsage();
       throw new OutOfMemoryError("Unable to acquire " + required + " bytes of memory, got " + got);
     }
+    // 将required累加到used，即更新已经使用的内存大小
     used += page.size();
+    // 返回MemoryBlock对象
     return page;
   }
 
-  /**
-   * Free a memory block.
-   */
-  protected void freePage(MemoryBlock page) {
-    // 首先更新used
-    used -= page.size();
-    // 释放MemoryBlock
-    taskMemoryManager.freePage(page, this);
-  }
+    /**
+     * Free a memory block.
+     */
+    protected void freePage(MemoryBlock page) {
+        // 首先更新used
+        used -= page.size();
+        // 释放MemoryBlock
+        taskMemoryManager.freePage(page, this);
+    }
 
   /**
    * Allocates memory of `size`.

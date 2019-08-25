@@ -29,17 +29,16 @@ import org.apache.spark.metrics.source.Source
 import org.apache.spark.util._
 
 /**
-  * TaskContext唯一的实现类
-  *
-  * @param stageId Task所属Stage的身份标识
-  * @param partitionId Task对应的分区索引
-  * @param taskAttemptId TaskAttempt的身份标识
-  * @param attemptNumber TaskAttempt号
-  * @param taskMemoryManager Task内存管理器TaskMemoryManager
-  * @param localProperties
-  * @param metricsSystem 度量系统MetricsSystem
-  * @param taskMetrics 用于跟踪Task执行过程的度量信息，类型为TaskMetrics
-  */
+ * TaskContext唯一的实现类
+ *
+ * @param stageId           Task所属Stage的身份标识
+ * @param partitionId       Task对应的分区索引
+ * @param taskAttemptId     TaskAttempt的身份标识
+ * @param attemptNumber     TaskAttempt号
+ * @param taskMemoryManager Task内存管理器TaskMemoryManager
+ * @param metricsSystem     度量系统MetricsSystem
+ * @param taskMetrics       用于跟踪Task执行过程的度量信息，类型为TaskMetrics
+ */
 private[spark] class TaskContextImpl(
     val stageId: Int,
     val partitionId: Int,
@@ -54,21 +53,21 @@ private[spark] class TaskContextImpl(
   with Logging {
 
   /** List of callback functions to execute when the task completes.
-    * 保存任务执行完成后需要回调的TaskCompletionListener的数组
-    **/
+   * 保存任务执行完成后需要回调的TaskCompletionListener的数组
+   */
   @transient private val onCompleteCallbacks = new ArrayBuffer[TaskCompletionListener]
 
   /** List of callback functions to execute when the task fails.
-    * 保存任务执行失败后需要回调的TaskFailureListener的数组
-    **/
+   * 保存任务执行失败后需要回调的TaskFailureListener的数组
+   */
   @transient private val onFailureCallbacks = new ArrayBuffer[TaskFailureListener]
 
   // Whether the corresponding task has been killed.
   /**
-    * TaskContextImpl相对应的TaskAttempt是否已经被kill的状态。
-    * 之所以用interrupted作为TaskAttempt被kill的状态变量，
-    * 是因为kill实际是通过对执行TaskAttempt的线程进行中断实现的。
-    */
+   * TaskContextImpl相对应的TaskAttempt是否已经被kill的状态。
+   * 之所以用interrupted作为TaskAttempt被kill的状态变量，
+   * 是因为kill实际是通过对执行TaskAttempt的线程进行中断实现的。
+   */
   @volatile private var interrupted: Boolean = false
 
   // Whether the task has completed.
@@ -92,8 +91,8 @@ private[spark] class TaskContextImpl(
   }
 
   /** Marks the task as failed and triggers the failure listeners.
-    * 标记Task执行失败
-    **/
+   * 标记Task执行失败
+   */
   private[spark] def markTaskFailed(error: Throwable): Unit = {
     // failure callbacks should only be called once
     // 判断Task是否已经被标记为失败。如果是，则返回
@@ -120,8 +119,8 @@ private[spark] class TaskContextImpl(
   }
 
   /** Marks the task as completed and triggers the completion listeners.
-    * 标记Task执行完成
-    **/
+   * 标记Task执行完成
+   */
   private[spark] def markTaskCompleted(): Unit = {
     // 将任务标记为已完成
     completed = true
@@ -145,8 +144,8 @@ private[spark] class TaskContextImpl(
   }
 
   /** Marks the task for interruption, i.e. cancellation.
-    * 标记Task已经被kill
-    **/
+   * 标记Task已经被kill
+   */
   private[spark] def markInterrupted(): Unit = {
     interrupted = true
   }

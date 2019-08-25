@@ -35,24 +35,33 @@ import org.apache.spark.shuffle.ShuffleWriter
  * specified in the ShuffleDependency).
  *
  * See [[org.apache.spark.scheduler.Task]] for more information.
-  *
-  * ShuffleMapTask类似于Hadoop中的MapTask，
-  * 它对输入数据计算后，将输出的数据在Shuffle之前映射到不同的分区，
-  * 下游处理各个分区的Task将知道处理哪些数据。
  *
- * @param stageId id of the stage this task belongs to
- * @param stageAttemptId attempt id of the stage this task belongs to
- * @param taskBinary broadcast version of the RDD and the ShuffleDependency. Once deserialized,
- *                   the type should be (RDD[_], ShuffleDependency[_, _, _]).
- * @param partition partition of the RDD this task is associated with
- * @param locs preferred task execution locations for locality scheduling
- * @param metrics a `TaskMetrics` that is created at driver side and sent to executor side.
+ * ShuffleMapTask类似于Hadoop中的MapTask，
+ * 它对输入数据计算后，将输出的数据在Shuffle之前映射到不同的分区，
+ * 下游处理各个分区的Task将知道处理哪些数据。
+ *
+ * @param stageId         id of the stage this task belongs to
+ *                        当前Task所属的Stage的ID
+ * @param stageAttemptId  attempt id of the stage this task belongs to
+ *                        当前Task所属的Stage Attempt的ID
+ * @param taskBinary      broadcast version of the RDD and the ShuffleDependency. Once deserialized,
+ *                        the type should be (RDD[_], ShuffleDependency[_, _, _]).
+ *                        广播后的RDD及ShuffleDependency依赖，反序列化将得到
+ *                        (RDD[_], ShuffleDependency[_, _, _])元组类型的结构
+ * @param partition       partition of the RDD this task is associated with
+ *                        该Task所对应的RDD的分区
+ * @param locs            preferred task execution locations for locality scheduling
+ *                        该Task的偏好位置
+ * @param metrics         a `TaskMetrics` that is created at driver side and sent to executor side.
  * @param localProperties copy of thread-local properties set by the user on the driver side.
  *
- * The parameters below are optional:
- * @param jobId id of the job this task belongs to
- * @param appId id of the app this task belongs to
- * @param appAttemptId attempt id of the app this task belongs to
+ *                        The parameters below are optional:
+ * @param jobId           id of the job this task belongs to
+ *                        Task所属Job的ID
+ * @param appId           id of the app this task belongs to
+ *                        Task所属的Application的ID
+ * @param appAttemptId    attempt id of the app this task belongs to
+ *                        Task所属的Application Attempt的ID
  */
 private[spark] class ShuffleMapTask(
     stageId: Int,
@@ -81,19 +90,26 @@ private[spark] class ShuffleMapTask(
   override def runTask(context: TaskContext): MapStatus = {
     // Deserialize the RDD using the broadcast variable.
     val threadMXBean = ManagementFactory.getThreadMXBean
+    // 记录反序列化开始时间
     val deserializeStartTime = System.currentTimeMillis()
     val deserializeStartCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime
     } else 0L
+    // 获取反序列化器
     val ser = SparkEnv.get.closureSerializer.newInstance()
-    // 对任务进行反序列化，得到RDD和ShuffleDependency
+    /**
+     * 对Task数据进行反序列化，得到RDD和ShuffleDependency
+     * 可回顾[[DAGScheduler.submitMissingTasks()]]方法对RDD和ShuffleDependency进行序列化广播的操作
+     */
     val (rdd, dep) = ser.deserialize[(RDD[_], ShuffleDependency[_, _, _])](
       ByteBuffer.wrap(taskBinary.value), Thread.currentThread.getContextClassLoader)
+    // 得到反序列化时间
     _executorDeserializeTime = System.currentTimeMillis() - deserializeStartTime
     _executorDeserializeCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
       threadMXBean.getCurrentThreadCpuTime - deserializeStartCpuTime
     } else 0L
 
+    // Shuffle写出器
     var writer: ShuffleWriter[Any, Any] = null
     try {
       // 将计算的中间结果写入磁盘文件

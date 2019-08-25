@@ -27,24 +27,24 @@ import org.apache.spark.metrics.source.Source
 import org.apache.spark.util.{AccumulatorV2, TaskCompletionListener, TaskFailureListener}
 
 /**
-  * TaskContext的伴生对象提供了将TaskContext保存到ThreadLocal中，
-  * 用于保证每个TaskAttempt线程的TaskContextImpl的线程安全性。
-  */
+ * TaskContext的伴生对象提供了将TaskContext保存到ThreadLocal中，
+ * 用于保证每个TaskAttempt线程的TaskContextImpl的线程安全性。
+ */
 object TaskContext {
   /**
    * Return the currently active TaskContext. This can be called inside of
    * user functions to access contextual information about running tasks.
-    *
-    * 从ThreadLocal中获取当前TaskAttempt线程的TaskContextImpl
+   *
+   * 从ThreadLocal中获取当前TaskAttempt线程的TaskContextImpl
    */
   def get(): TaskContext = taskContext.get
 
   /**
    * Returns the partition id of currently active TaskContext. It will return 0
    * if there is no active TaskContext for cases like local execution.
-    *
-    * 从ThreadLocal中获取当前TaskAttempt线程的TaskContextImpl，
-    * 然后调用TaskContextImpl的partitionId方法获取当前Task对应的分区索引。
+   *
+   * 从ThreadLocal中获取当前TaskAttempt线程的TaskContextImpl，
+   * 然后调用TaskContextImpl的partitionId方法获取当前Task对应的分区索引。
    */
   def getPartitionId(): Int = {
     val tc = taskContext.get()
@@ -61,22 +61,22 @@ object TaskContext {
   // showing up in JavaDoc.
   /**
    * Set the thread local TaskContext. Internal to Spark.
-    *
-    * 将TaskContextImpl设置到ThreadLocal中。
+   *
+   * 将TaskContextImpl设置到ThreadLocal中。
    */
   protected[spark] def setTaskContext(tc: TaskContext): Unit = taskContext.set(tc)
 
   /**
    * Unset the thread local TaskContext. Internal to Spark.
-    *
-    * 移除ThreadLocal中保存的当前TaskAttempt线程的TaskContextImpl。
+   *
+   * 移除ThreadLocal中保存的当前TaskAttempt线程的TaskContextImpl。
    */
   protected[spark] def unset(): Unit = taskContext.remove()
 
   /**
    * An empty task context that does not represent an actual task.  This is only used in tests.
-    *
-    * 创建一个没有任何实际意义的TaskContextImpl。
+   *
+   * 创建一个没有任何实际意义的TaskContextImpl。
    */
   private[spark] def empty(): TaskContextImpl = {
     new TaskContextImpl(0, 0, 0, 0, null, new Properties, null)
@@ -90,8 +90,8 @@ object TaskContext {
  * {{{
  *   org.apache.spark.TaskContext.get()
  * }}}
-  *
-  * 维护了Task执行时的上下文信息，只有一个实现类TaskContextImpl
+ *
+ * 维护了Task执行时的上下文信息，只有一个实现类TaskContextImpl
  */
 abstract class TaskContext extends Serializable {
   // Note: TaskContext must NOT define a get method. Otherwise it will prevent the Scala compiler
@@ -113,6 +113,7 @@ abstract class TaskContext extends Serializable {
 
   /**
    * Returns true if the task is running locally in the driver program.
+   *
    * @return false
    */
   @deprecated("Local execution was removed, so this always returns false", "2.0.0")

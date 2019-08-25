@@ -64,14 +64,14 @@ public class TaskMemoryManager {
   /** The number of bits used to encode offsets in data pages.
    * 用于保存编码后的偏移量的位数。静态常量OFFSET_BITS的值为51。
    * 在64位的长整型中将使用低位的51位存储偏移量。
-   **/
+   */
   @VisibleForTesting
   static final int OFFSET_BITS = 64 - PAGE_NUMBER_BITS;  // 51
 
   /** The number of entries in the page table.
    * Page表中的Page数量。静态常量PAGE_TABLE_SIZE的值为8192，
    * 实际是将1向左位移13（即PAGE_NUMBER_BITS）位所得的值。
-   **/
+   */
   private static final int PAGE_TABLE_SIZE = 1 << PAGE_NUMBER_BITS;
 
   /**
@@ -80,14 +80,15 @@ public class TaskMemoryManager {
    * maximum page size is limited by the maximum amount of data that can be stored in a long[]
    * array, which is (2^32 - 1) * 8 bytes (or 16 gigabytes). Therefore, we cap this at 16 gigabytes.
    *
-   * 最大的Page大小。静态常量MAXIMUM_PAGE_SIZE_BYTES的值为17179869176，即（2^32-1）×8。
+   * 最大的Page大小。静态常量MAXIMUM_PAGE_SIZE_BYTES的值为17179869176，即（2^32-1）× 8。
    */
   public static final long MAXIMUM_PAGE_SIZE_BYTES = ((1L << 31) - 1) * 8L;
 
   /** Bit mask for the lower 51 bits of a long.
    * 长整型的低51位的位掩码。静态常量MASK_LONG_LOWER_51_BITS的值为2251799813685247，
-   * 即十六进制0x7FFFFFFFFFFFFL。
-   **/
+   * 即十六进制0x7FFFFFFFFFFFFL，
+   * 二进制0000 0000 0000 0111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111
+   */
   private static final long MASK_LONG_LOWER_51_BITS = 0x7FFFFFFFFFFFFL;
 
   /**
@@ -158,8 +159,10 @@ public class TaskMemoryManager {
    * @return number of bytes successfully granted (<= N).
    */
   public long acquireExecutionMemory(long required, MemoryConsumer consumer) {
+    // 检查申请大小和发出申请的消费者
     assert(required >= 0);
     assert(consumer != null);
+    // 获取申请的内存模式
     MemoryMode mode = consumer.getMode();
     // If we are allocating Tungsten pages off-heap and receive a request to allocate on-heap
     // memory here, then it may not make sense to spill since that would only end up freeing
@@ -173,18 +176,19 @@ public class TaskMemoryManager {
       // spilling, avoid to have too many spilled files.
       if (got < required) { // 逻辑上已经获得的内存未达到期望的内存大小
         // Call spill() on other consumers to release memory
-        // 遍历consumers中与指定内存模式相同且已经使用了内存的MemoryConsumer
+        // 遍历consumers中与指定内存模式相同且已经使用了内存的MemoryConsumer，尝试溢写以空闲一部分内存
         for (MemoryConsumer c: consumers) {
+          // 前置条件：不能是当前发出申请的消费者，且已使用内存要大于0，同时内存模式与申请的一样
           if (c != consumer && c.getUsed() > 0 && c.getMode() == mode) {
             try {
-              // 调用MemoryConsumer的spill()方法溢出数据到磁盘，以释放内存，为当前的TaskAttempt腾出内存
+              // 调用MemoryConsumer的spill()方法尝试溢出数据到磁盘，以释放内存，为当前的TaskAttempt腾出内存
               long released = c.spill(required - got, consumer);
               if (released > 0) { // MemoryConsumer释放了内存空间
                 logger.debug("Task {} released {} from {} for {}", taskAttemptId,
                   Utils.bytesToString(released), c, consumer);
-                // 尝试为当前任务按指定的存储模式继续获取期望获得的内存与已经获得的内存之间差值大小的内存。
+                // 溢写成功，再次尝试为当前MemoryConsumer从MemoryManager申请不够的那部分内存
                 got += memoryManager.acquireExecutionMemory(required - got, taskAttemptId, mode);
-                if (got >= required) { // 已经获得的内存达到期望的内存大小
+                if (got >= required) { // 已经获得的内存达到期望的内存大小，则直接结束溢出操作
                   break;
                 }
               }
@@ -198,9 +202,13 @@ public class TaskMemoryManager {
       }
 
       // call spill() on itself
+     /**
+      * 走到这里，说明已经对其他MemoryConsumer尝试了溢写操作了，
+      * 如果申请的内存还不够，那么只能让当前申请内存的MemoryConsumer尝试溢写以空闲一部分内存了
+      */
       if (got < required) { // 已经获得的内存还未达到期望的内存大小
         try {
-          // 将数据溢出到磁盘以释放内存
+          // 让当前申请内存的MemoryConsumer尝试将数据溢出到磁盘以释放内存
           long released = consumer.spill(required - got, consumer);
           if (released > 0) { // 获取内存的最后尝试
             logger.debug("Task {} released {} from itself ({})", taskAttemptId,
@@ -285,7 +293,7 @@ public class TaskMemoryManager {
     // 校验参数
     assert(consumer != null);
     assert(consumer.getMode() == tungstenMemoryMode);
-    // 请求获得的页大小不能超出限制
+    // 请求获得的页大小不能超出限制17179869176，即（2^32-1）× 8
     if (size > MAXIMUM_PAGE_SIZE_BYTES) {
       throw new IllegalArgumentException(
         "Cannot allocate a page with more than " + MAXIMUM_PAGE_SIZE_BYTES + " bytes");
@@ -298,11 +306,14 @@ public class TaskMemoryManager {
       return null;
     }
 
+    // 页控制
     final int pageNumber;
     synchronized (this) {
       // 获得还未分配的页号
       pageNumber = allocatedPages.nextClearBit(0);
+      // 页号不能大于总页数
       if (pageNumber >= PAGE_TABLE_SIZE) {
+        // 释放申请的逻辑内存
         releaseExecutionMemory(acquired, consumer);
         throw new IllegalStateException(
           "Have already allocated a maximum of " + PAGE_TABLE_SIZE + " pages");
@@ -389,7 +400,10 @@ public class TaskMemoryManager {
       // In off-heap mode, an offset is an absolute address that may require a full 64 bits to
       // encode. Due to our page size limitation, though, we can convert this into an offset that's
       // relative to the page's base offset; this relative offset will fit in 51 bits.
-      // 此时的参数offsetInPage是操作系统内存的绝对地址，offsetInPage与MemoryBlock的起始地址之差就是相对于起始地址的偏移量
+      /**
+       * 此时的参数offsetInPage是操作系统内存的绝对地址，
+       * offsetInPage与MemoryBlock的起始地址之差就是相对于起始地址的偏移量
+       */
       offsetInPage -= page.getBaseOffset();
     }
     // 通过位运算将页号存储到64位长整型的高13位中，并将偏移量存储到64位长整型的低51位中，返回生成的64位的长整型。
@@ -406,36 +420,38 @@ public class TaskMemoryManager {
   // 用于解码页号，将64位的长整型右移51位（只剩下页号），然后转换为整型以获得Page的页号。
   @VisibleForTesting
   public static int decodePageNumber(long pagePlusOffsetAddress) {
+    // 右移51位
     return (int) (pagePlusOffsetAddress >>> OFFSET_BITS);
   }
 
   // 解码偏移量，用于将64位的长整型与51位的掩码按位进行与运算，以获得在Page中的偏移量。
   private static long decodeOffset(long pagePlusOffsetAddress) {
+    // 与上MASK_LONG_LOWER_51_BITS掩码，即取pagePlusOffsetAddress的低51位
     return (pagePlusOffsetAddress & MASK_LONG_LOWER_51_BITS);
   }
 
-  /**
-   * Get the page associated with an address encoded by
-   * {@link TaskMemoryManager#encodePageNumberAndOffset(MemoryBlock, long)}
-   *
-   * 用于获取Page，通过64位的长整型，获取Page在内存中的对象。此方法在Tungsten采用堆内存模式时有效，否则返回null。
-   */
-  public Object getPage(long pagePlusOffsetAddress) {
-    if (tungstenMemoryMode == MemoryMode.ON_HEAP) { // Tungsten的内存模式是堆内存
-      // 获得Page的页号
-      final int pageNumber = decodePageNumber(pagePlusOffsetAddress);
-      assert (pageNumber >= 0 && pageNumber < PAGE_TABLE_SIZE);
-      // 从pageTable中取出MemoryBlock
-      final MemoryBlock page = pageTable[pageNumber];
-      assert (page != null);
-      assert (page.getBaseObject() != null);
-      // 返回MemoryBlock的obj
-      return page.getBaseObject();
-    } else { // Tungsten的内存模式是堆外内存
-      // 由于使用操作系统内存时不需要在JVM堆上创建对象，因此直接返回null
-      return null;
+    /**
+     * Get the page associated with an address encoded by
+     * {@link TaskMemoryManager#encodePageNumberAndOffset(MemoryBlock, long)}
+     * <p>
+     * 用于获取Page，通过64位的长整型，获取Page在内存中的对象。此方法在Tungsten采用堆内存模式时有效，否则返回null。
+     */
+    public Object getPage(long pagePlusOffsetAddress) {
+        if (tungstenMemoryMode == MemoryMode.ON_HEAP) { // Tungsten的内存模式是堆内存
+            // 获得Page的页号
+            final int pageNumber = decodePageNumber(pagePlusOffsetAddress);
+            assert (pageNumber >= 0 && pageNumber < PAGE_TABLE_SIZE);
+            // 从pageTable中取出MemoryBlock
+            final MemoryBlock page = pageTable[pageNumber];
+            assert (page != null);
+            assert (page.getBaseObject() != null);
+            // 返回MemoryBlock的obj
+            return page.getBaseObject();
+        } else { // Tungsten的内存模式是堆外内存
+            // 由于使用操作系统内存时不需要在JVM堆上创建对象，因此直接返回null
+            return null;
+        }
     }
-  }
 
   /**
    * Get the offset associated with an address encoded by
@@ -471,26 +487,33 @@ public class TaskMemoryManager {
    */
   public long cleanUpAllAllocatedMemory() {
     synchronized (this) {
+      // 遍历所有的内存消费者，进行日志记录
       for (MemoryConsumer c: consumers) {
         if (c != null && c.getUsed() > 0) {
           // In case of failed task, it's normal to see leaked memory
           logger.debug("unreleased " + Utils.bytesToString(c.getUsed()) + " memory from " + c);
         }
       }
+      // 清空consumers数组
       consumers.clear();
 
+      // 遍历pageTable管理的所有MemoryBlock
       for (MemoryBlock page : pageTable) {
         if (page != null) {
           logger.debug("unreleased page: " + page + " in task " + taskAttemptId);
+          // 使用具体的Tungsten MemoryAllocator进行释放
           memoryManager.tungstenMemoryAllocator().free(page);
         }
       }
+      // 将pageTable填充为空数组
       Arrays.fill(pageTable, null);
     }
 
     // release the memory that is not used by any consumer (acquired for pages in tungsten mode).
+    // 释放未被使用的Tungsten内存
     memoryManager.releaseExecutionMemory(acquiredButNotUsed, taskAttemptId, tungstenMemoryMode);
 
+    // 使用当前TaskAttempt占用的所有执行内存
     return memoryManager.releaseAllExecutionMemoryForTask(taskAttemptId);
   }
 

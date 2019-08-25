@@ -42,24 +42,24 @@ import org.apache.spark.util._
  * and sends the task output back to the driver application. A ShuffleMapTask executes the task
  * and divides the task output to multiple buckets (based on the task's partitioner).
  *
- * @param stageId id of the stage this task belongs to
-  *                Task所属Stage的身份标识
- * @param stageAttemptId attempt id of the stage this task belongs to
-  *                       Stage尝试的身份标识
- * @param partitionId index of the number in the RDD
-  *                    Task对应的分区索引
- * @param metrics a `TaskMetrics` that is created at driver side and sent to executor side.
-  *                用于跟踪Task执行过程的度量信息，类型为TaskMetric
+ * @param stageId         id of the stage this task belongs to
+ *                        Task所属Stage的身份标识
+ * @param stageAttemptId  attempt id of the stage this task belongs to
+ *                        Stage尝试的身份标识
+ * @param partitionId     index of the number in the RDD
+ *                        Task对应的分区索引
+ * @param metrics         a `TaskMetrics` that is created at driver side and sent to executor side.
+ *                        用于跟踪Task执行过程的度量信息，类型为TaskMetric
  * @param localProperties copy of thread-local properties set by the user on the driver side.
-  *                        Task执行所需的属性信息
+ *                        Task执行所需的属性信息
  *
- * The parameters below are optional:
- * @param jobId id of the job this task belongs to
-  *              Task所属Job的身份标识
- * @param appId id of the app this task belongs to
-  *              Task所属Application的身份标识，即SparkContext的_applicationId属性
- * @param appAttemptId attempt id of the app this task belongs to
-  *                     Task所属Application尝试的身份标识，即SparkContext的_applicationAttemptId属性
+ *                        The parameters below are optional:
+ * @param jobId           id of the job this task belongs to
+ *                        Task所属Job的身份标识
+ * @param appId           id of the app this task belongs to
+ *                        Task所属Application的身份标识，即SparkContext的_applicationId属性
+ * @param appAttemptId    attempt id of the app this task belongs to
+ *                        Task所属Application尝试的身份标识，即SparkContext的_applicationAttemptId属性
  */
 private[spark] abstract class Task[T](
     val stageId: Int,
@@ -74,8 +74,8 @@ private[spark] abstract class Task[T](
 
   /**
    * Called by [[org.apache.spark.executor.Executor]] to run this task.
-    *
-    * 模板方法，此方法是运行Task的入口
+   *
+   * 模板方法，此方法是运行Task的入口
    *
    * @param taskAttemptId an identifier for this task attempt that is unique within a SparkContext.
    * @param attemptNumber how many times this task has been attempted (0 for the first attempt)
@@ -85,7 +85,7 @@ private[spark] abstract class Task[T](
       taskAttemptId: Long,
       attemptNumber: Int,
       metricsSystem: MetricsSystem): T = {
-    // // 将TaskAttempt注册到BlockInfoManager
+    // 将TaskAttempt注册到BlockInfoManager
     SparkEnv.get.blockManager.registerTask(taskAttemptId)
     // 创建TaskAttempt的上下文
     context = new TaskContextImpl(
@@ -100,7 +100,7 @@ private[spark] abstract class Task[T](
 
     // 将任务尝试的上下文保存到ThreadLocal中
     TaskContext.setTaskContext(context)
-    // 获取运行任务尝试的线程
+    // 获取运行TaskAttempt的线程
     taskThread = Thread.currentThread()
 
     if (_killed) {
@@ -120,9 +120,9 @@ private[spark] abstract class Task[T](
         // Catch all errors; run task failure callbacks, and rethrow the exception.
         try {
           /**
-            * 捕获到任何错误，调用TaskContextImpl的markTaskFailed()方法，
-            * 执行所有TaskFailureListener的onTaskFailure()方法。
-            */
+           * 捕获到任何错误，调用TaskContextImpl的markTaskFailed()方法，
+           * 执行所有TaskFailureListener的onTaskFailure()方法。
+           */
           context.markTaskFailed(e)
         } catch {
           case t: Throwable =>
@@ -134,7 +134,7 @@ private[spark] abstract class Task[T](
       // 无论任务尝试是否成功，都会执行所有TaskCompletionListener的onTaskCompletion()方法
       context.markTaskCompleted()
       try {
-        //释放任务尝试所占用的堆内存和堆外内存
+        // 释放任务尝试所占用的堆内存和堆外内存
         Utils.tryLogNonFatalError {
           // Release memory used by this thread for unrolling blocks
           // 释放任务尝试所占用的堆内存和堆外内存，以便唤醒任何等待MemoryManager管理的执行内存的任务尝试
@@ -208,8 +208,8 @@ private[spark] abstract class Task[T](
   /**
    * Collect the latest values of accumulators used in this task. If the task failed,
    * filter out the accumulators whose values should not be included on failures.
-    *
-    * 收集Task使用的累加器的最新值，并更新到TaskMetrics中。
+   *
+   * 收集Task使用的累加器的最新值，并更新到TaskMetrics中。
    */
   def collectAccumulatorUpdates(taskFailed: Boolean = false): Seq[AccumulatorV2[_, _]] = {
     if (context != null) {
@@ -231,8 +231,8 @@ private[spark] abstract class Task[T](
    * code and user code to properly handle the flag. This function should be idempotent so it can
    * be called multiple times.
    * If interruptThread is true, we will also call Thread.interrupt() on the Task's executor thread.
-    *
-    * 用于kill任务尝试线程
+   *
+   * 用于kill TaskAttempt线程
    */
   def kill(interruptThread: Boolean) {
     // 将Task和TaskContextImpl标记为已经被kill
