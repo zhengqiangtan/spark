@@ -116,8 +116,8 @@ abstract class RDD[T: ClassTag](
   /**
    * :: DeveloperApi ::
    * Implemented by subclasses to compute a given partition.
-    *
-    * 对RDD的分区进行计算
+   *
+   * 对RDD的分区进行计算
    */
   @DeveloperApi
   def compute(split: Partition, context: TaskContext): Iterator[T]
@@ -317,8 +317,8 @@ abstract class RDD[T: ClassTag](
    * Internal method to this RDD; will read from cache if applicable, or otherwise compute it.
    * This should ''not'' be called by users directly, but is available for implementors of custom
    * subclasses of RDD.
-    *
-    * 迭代计算的入口
+   *
+   * 迭代计算的入口
    */
   final def iterator(split: Partition, context: TaskContext): Iterator[T] = {
     if (storageLevel != StorageLevel.NONE) { // 如果RDD的存储级别（StorageLevel）不是NONE
@@ -366,8 +366,8 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Compute an RDD partition or read it from a checkpoint if the RDD is checkpointing.
-    *
-    * 存在检查点时直接从检查点读取数据，否则需要调用compute()方法继续计算
+   *
+   * 存在检查点时直接从检查点读取数据，否则需要调用compute()方法继续计算
    */
   private[spark] def computeOrReadCheckpoint(split: Partition, context: TaskContext): Iterator[T] =
   {
@@ -392,10 +392,11 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Gets or computes an RDD partition. Used by RDD.iterator() when an RDD is cached.
-    *
-    * 获取或计算RDD的分区
+   *
+   * 获取或计算RDD的分区
    */
   private[spark] def getOrCompute(partition: Partition, context: TaskContext): Iterator[T] = {
+    // 构造RDDBlockId，由RDD ID、Partition索引来决定的
     val blockId = RDDBlockId(id, partition.index)
     var readCachedBlock = true
     // This method is called on executors, so we need call SparkEnv.get instead of sc.env.
@@ -403,6 +404,7 @@ abstract class RDD[T: ClassTag](
     SparkEnv.get.blockManager.getOrElseUpdate(blockId, storageLevel, elementClassTag, () => {
       // 没有获取到则调用computeOrReadCheckpoint()从检查点获取
       readCachedBlock = false
+      // 从检查点读取或重新尝试计算
       computeOrReadCheckpoint(partition, context)
     }) match {
       case Left(blockResult) =>
@@ -438,8 +440,8 @@ abstract class RDD[T: ClassTag](
 
   /**
    * Return a new RDD by applying a function to all elements of this RDD.
-    *
-    * 用于向RDD中的所有元素应用函数。
+   *
+   * 用于向RDD中的所有元素应用函数。
    */
   def map[U: ClassTag](f: T => U): RDD[U] = withScope {
     // 对传递的算子操作操作预处理

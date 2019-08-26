@@ -35,7 +35,7 @@ import org.apache.spark.shuffle._
  *  - Serialized sorting: used when all three of the following conditions hold:
  *    1. The shuffle dependency specifies no aggregation or output ordering.
  *    2. The shuffle serializer supports relocation of serialized values (this is currently
- *       supported by KryoSerializer and Spark SQL's custom serializers).
+ * supported by KryoSerializer and Spark SQL's custom serializers).
  *    3. The shuffle produces fewer than 16777216 output partitions.
  *  - Deserialized sorting: used to handle all other cases.
  *
@@ -48,31 +48,33 @@ import org.apache.spark.shuffle._
  * several optimizations:
  *
  *  - Its sort operates on serialized binary data rather than Java objects, which reduces memory
- *    consumption and GC overheads. This optimization requires the record serializer to have certain
- *    properties to allow serialized records to be re-ordered without requiring deserialization.
- *    See SPARK-4550, where this optimization was first proposed and implemented, for more details.
+ * consumption and GC overheads. This optimization requires the record serializer to have certain
+ * properties to allow serialized records to be re-ordered without requiring deserialization.
+ * See SPARK-4550, where this optimization was first proposed and implemented, for more details.
  *
  *  - It uses a specialized cache-efficient sorter ([[ShuffleExternalSorter]]) that sorts
- *    arrays of compressed record pointers and partition ids. By using only 8 bytes of space per
- *    record in the sorting array, this fits more of the array into cache.
+ * arrays of compressed record pointers and partition ids. By using only 8 bytes of space per
+ * record in the sorting array, this fits more of the array into cache.
  *
  *  - The spill merging procedure operates on blocks of serialized records that belong to the same
- *    partition and does not need to deserialize records during the merge.
+ * partition and does not need to deserialize records during the merge.
  *
  *  - When the spill compression codec supports concatenation of compressed data, the spill merge
- *    simply concatenates the serialized and compressed spill partitions to produce the final output
+ * simply concatenates the serialized and compressed spill partitions to produce the final output
  *    partition.  This allows efficient data copying methods, like NIO's `transferTo`, to be used
- *    and avoids the need to allocate decompression or copying buffers during the merge.
+ * and avoids the need to allocate decompression or copying buffers during the merge.
  *
  * For more details on these optimizations, see SPARK-7081.
-  *
-  * 管理基于排序的Shuffle——输入的记录按照目标分区ID排序，然后输出到一个单独的map输出文件中。
-  * reduce为了读出map输出，需要获取map输出文件的连续内容。
-  * 当map的输出数据太大已经不适合放在内存中时，排序后的输出子集将被溢出到文件中，这些磁盘上的文件将被合并生成最终的输出文件。
+ *
+ * 管理基于排序的Shuffle——输入的记录按照目标分区ID排序，然后输出到一个单独的map输出文件中。
+ * reduce为了读出map输出，需要获取map输出文件的连续内容。
+ * 当map的输出数据太大已经不适合放在内存中时，排序后的输出子集将被溢出到文件中，这些磁盘上的文件将被合并生成最终的输出文件。
  */
 private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
 
+  // 检查是否开启溢写
   if (!conf.getBoolean("spark.shuffle.spill", true)) {
+    // 1.6版本之后默认开启Shuffle的溢写操作，不会理会spark.shuffle.spill参数
     logWarning(
       "spark.shuffle.spill was set to false, but this configuration is ignored as of Spark 1.6+." +
         " Shuffle will continue to spill to disk when necessary.")

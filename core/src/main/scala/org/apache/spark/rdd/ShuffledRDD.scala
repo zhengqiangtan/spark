@@ -80,6 +80,7 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
   }
 
   override def getDependencies: Seq[Dependency[_]] = {
+    // 获取序列化器
     val serializer = userSpecifiedSerializer.getOrElse {
       val serializerManager = SparkEnv.get.serializerManager
       if (mapSideCombine) {
@@ -88,6 +89,7 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
         serializerManager.getSerializer(implicitly[ClassTag[K]], implicitly[ClassTag[V]])
       }
     }
+    // 返回依赖列表，只包含了一个ShuffleDependency
     List(new ShuffleDependency(prev, part, serializer, keyOrdering, aggregator, mapSideCombine))
   }
 
@@ -98,12 +100,16 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
   }
 
   override protected def getPreferredLocations(partition: Partition): Seq[String] = {
+    // 获取Map任务输出跟踪器
     val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
+    // 获取第一个依赖
     val dep = dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
+    // 通过Map任务输出跟踪器根据依赖和分区索引查找偏好位置
     tracker.getPreferredLocationsForShuffle(dep, partition.index)
   }
 
   override def compute(split: Partition, context: TaskContext): Iterator[(K, C)] = {
+    // 获取第一个依赖
     val dep = dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
     // 首先调用SortShuffleManager的getReader()方法获取BlockStoreShuffleReader
     SparkEnv.get.shuffleManager.getReader(dep.shuffleHandle, split.index, split.index + 1, context)

@@ -71,6 +71,14 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
    *
    * @note V and C can be different -- for example, one might group an RDD of type
    * (Int, Int) into an RDD of type (Int, Seq[Int]).
+   *
+   * @param createCombiner 分组内数据的初始化
+   * @param mergeValue 合并分组内数据
+   * @param mergeCombiners 合并多个分区的数据
+   * @param partitioner 分区器
+   * @param mapSideCombine 是否在Map端进行Combine
+   * @param serializer 序列化器
+   * @return
    */
   @Experimental
   def combineByKeyWithClassTag[C](
@@ -80,25 +88,32 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
       partitioner: Partitioner,
       mapSideCombine: Boolean = true,
       serializer: Serializer = null)(implicit ct: ClassTag[C]): RDD[(K, C)] = self.withScope {
+    // mergeCombiners不能为空
     require(mergeCombiners != null, "mergeCombiners must be defined") // required as of Spark 0.9.0
+    // PairRDD的key类型不能为数组，否则会报错
     if (keyClass.isArray) {
       if (mapSideCombine) {
         throw new SparkException("Cannot use map-side combining with array keys.")
       }
+      // hash分区器不能作用于数组键
       if (partitioner.isInstanceOf[HashPartitioner]) {
         throw new SparkException("HashPartitioner cannot partition array keys.")
       }
     }
+    // 创建聚集器
     val aggregator = new Aggregator[K, V, C](
       self.context.clean(createCombiner),
       self.context.clean(mergeValue),
       self.context.clean(mergeCombiners))
+    // 判断传入分区器是否相同
     if (self.partitioner == Some(partitioner)) {
+      // 如果分区器相同，直接使用聚集器将迭代器中的数据进行聚合，返回InterruptibleIterator迭代器
       self.mapPartitions(iter => {
         val context = TaskContext.get()
         new InterruptibleIterator(context, aggregator.combineValuesByKey(iter, context))
       }, preservesPartitioning = true)
     } else {
+      // 分区器不同，则创建ShuffledRDD
       new ShuffledRDD[K, V, C](self, partitioner)
         .setSerializer(serializer)
         .setAggregator(aggregator)
@@ -309,6 +324,10 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
    * to a "combiner" in MapReduce.
    */
   def reduceByKey(partitioner: Partitioner, func: (V, V) => V): RDD[(K, V)] = self.withScope {
+    /**
+     * 使用combineByKey算子来实现
+     * createCombiner是(v: V) => v，mergeValue是func，mergeCombiners是func
+     */
     combineByKeyWithClassTag[V]((v: V) => v, func, func, partitioner)
   }
 
@@ -318,6 +337,7 @@ class PairRDDFunctions[K, V](self: RDD[(K, V)])
    * to a "combiner" in MapReduce. Output will be hash-partitioned with numPartitions partitions.
    */
   def reduceByKey(func: (V, V) => V, numPartitions: Int): RDD[(K, V)] = self.withScope {
+    // 传入默认的Hash分区器以及汇总函数
     reduceByKey(new HashPartitioner(numPartitions), func)
   }
 

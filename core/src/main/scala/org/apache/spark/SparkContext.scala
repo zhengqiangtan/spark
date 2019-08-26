@@ -954,7 +954,7 @@ class SparkContext(config: SparkConf) extends Logging {
     // 使用hadoopFile()方法进行读取，先得到HadoopRDD
     hadoopFile(path, classOf[TextInputFormat], classOf[LongWritable], classOf[Text],
       minPartitions)
-      // 然后进行map操作，每个pair是 (行号, 行内容) 二元元组，返回MapPartitionsRDD
+      // 然后进行map操作，每个pair是 (行偏移量, 行内容) 二元元组，返回MapPartitionsRDD
       .map(pair => pair._2.toString).setName(path)
   }
 
@@ -1143,11 +1143,15 @@ class SparkContext(config: SparkConf) extends Logging {
 
     // This is a hack to enforce loading hdfs-site.xml.
     // See SPARK-11227 for details.
+    // 获取本地的Hadoop的Configuration配置信息
     FileSystem.getLocal(hadoopConfiguration)
 
     // A Hadoop configuration can be about 10 KB, which is pretty big, so broadcast it.
+    // 广播Hadoop Configuration信息
     val confBroadcast = broadcast(new SerializableConfiguration(hadoopConfiguration))
+    // 用于设置文件输入路径的函数
     val setInputPathsFunc = (jobConf: JobConf) => FileInputFormat.setInputPaths(jobConf, path)
+    // 构建HadoopRDD
     new HadoopRDD(
       this,
       confBroadcast,

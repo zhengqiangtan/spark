@@ -70,6 +70,10 @@ private[spark] abstract class NextIterator[U] extends Iterator[U] {
   override def hasNext: Boolean = {
     if (!finished) {
       if (!gotNext) {
+        /**
+         * 通过getNext()获取下一个元素
+         * 并赋值给nextValue
+         */
         nextValue = getNext()
         if (finished) {
           closeIfNeeded()
@@ -85,6 +89,7 @@ private[spark] abstract class NextIterator[U] extends Iterator[U] {
       throw new NoSuchElementException("End of stream")
     }
     gotNext = false
+    // 将nextValue返回
     nextValue
   }
 }

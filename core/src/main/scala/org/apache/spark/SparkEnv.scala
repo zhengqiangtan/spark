@@ -284,12 +284,15 @@ object SparkEnv extends Logging {
       // Look for a constructor taking a SparkConf and a boolean isDriver, then one taking just
       // SparkConf, then one taking no arguments
       try {
+        // 反射创建，使用了两个参数的构造方法，第一个参数为SparkConf类型，第二个参数为Boolean类型
         cls.getConstructor(classOf[SparkConf], java.lang.Boolean.TYPE)
+          // 具体创建时，第一个参数传入SparkConf，第二个参数传入isDriver
           .newInstance(conf, new java.lang.Boolean(isDriver))
           .asInstanceOf[T]
       } catch {
-        case _: NoSuchMethodException =>
+        case _: NoSuchMethodException => // 如果不存在对应的参数的构造方法
           try {
+            // 使用一个参数的构造方法，只传入SparkConf
             cls.getConstructor(classOf[SparkConf]).newInstance(conf).asInstanceOf[T]
           } catch {
             case _: NoSuchMethodException =>
@@ -353,17 +356,17 @@ object SparkEnv extends Logging {
       new MapOutputTrackerMasterEndpoint(
         rpcEnv, mapOutputTracker.asInstanceOf[MapOutputTrackerMaster], conf))
 
-    // Let the user specify short names for shuffle managers
-    // sort和tungsten-sort两种ShuffleManager的实现了都是SortShuffleManager
-    val shortShuffleMgrNames = Map(
-      "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
-      "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
-    // 由参数spark.shuffle.manager来指定ShuffleManager，默认是SortShuffleManager
-    val shuffleMgrName = conf.get("spark.shuffle.manager", "sort")
-    val shuffleMgrClass = shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase, shuffleMgrName)
+  // Let the user specify short names for shuffle managers
+  // sort和tungsten-sort两种ShuffleManager的实现了都是SortShuffleManager
+  val shortShuffleMgrNames = Map(
+    "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
+    "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
+  // 由参数spark.shuffle.manager来指定ShuffleManager，默认是SortShuffleManager
+  val shuffleMgrName = conf.get("spark.shuffle.manager", "sort")
+  val shuffleMgrClass = shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase, shuffleMgrName)
 
-    // 初始化ShuffleManager，利用反射机制创建
-    val shuffleManager = instantiateClass[ShuffleManager](shuffleMgrClass)
+  // 初始化ShuffleManager，利用反射机制创建
+  val shuffleManager = instantiateClass[ShuffleManager](shuffleMgrClass)
 
     // 是否使用旧的StaticMemoryManager，默认为fasle
     val useLegacyMemoryManager = conf.getBoolean("spark.memory.useLegacyMode", false)

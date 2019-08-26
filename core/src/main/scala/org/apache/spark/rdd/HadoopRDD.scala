@@ -224,23 +224,30 @@ class HadoopRDD[K, V](
   }
 
   override def compute(theSplit: Partition, context: TaskContext): InterruptibleIterator[(K, V)] = {
+    // 创建一个NextIterator迭代器
     val iter = new NextIterator[(K, V)] {
 
+      // 将theSplit参数转换为HadoopPartition类型
       private val split = theSplit.asInstanceOf[HadoopPartition]
       logInfo("Input split: " + split.inputSplit)
+      // 获取Hadoop的Configuration配置对象，JobConf继承自Hadoop的org.apache.hadoop.conf.Configuration
       private val jobConf = getJobConf()
 
+      // 度量信息
       private val inputMetrics = context.taskMetrics().inputMetrics
       private val existingBytesRead = inputMetrics.bytesRead
 
       // Sets the thread local variable for the file's name
+      // 对分区的InputSplit序列化分片数据进行匹配
       split.inputSplit.value match {
+        // 设置分片所在文件的路径到InputFileNameHolder中进行记录
         case fs: FileSplit => InputFileNameHolder.setInputFileName(fs.getPath.toString)
         case _ => InputFileNameHolder.unsetInputFileName()
       }
 
       // Find a function that will return the FileSystem bytes read by this thread. Do this before
       // creating RecordReader, because RecordReader's constructor might read some bytes
+      // 寻找用于读取数据的回调函数
       private val getBytesReadCallback: Option[() => Long] = split.inputSplit.value match {
         case _: FileSplit | _: CombineFileSplit =>
           SparkHadoopUtil.get.getFSBytesReadOnThreadCallback()
@@ -251,20 +258,25 @@ class HadoopRDD[K, V](
       // If we do a coalesce, however, we are likely to compute multiple partitions in the same
       // task and in the same thread, in which case we need to avoid override values written by
       // previous partitions (SPARK-13071).
+      // 主要用于更新度量信息
       private def updateBytesRead(): Unit = {
         getBytesReadCallback.foreach { getBytesRead =>
           inputMetrics.setBytesRead(existingBytesRead + getBytesRead())
         }
       }
 
+      // Hadoop的RecordReader，用于读取数据
       private var reader: RecordReader[K, V] = null
+      // 获取InputFormat，读取本地文件时为TextInputFormat
       private val inputFormat = getInputFormat(jobConf)
+      // 设置时间本地化配置
       HadoopRDD.addLocalConfiguration(
         new SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(createTime),
         context.stageId, theSplit.index, context.attemptNumber, jobConf)
 
-      reader =
+      reader = // 本地文件时，为LineRecordReader
         try {
+          // 通过InputFormat获取RecordReader记录读取器
           inputFormat.getRecordReader(split.inputSplit.value, jobConf, Reporter.NULL)
         } catch {
           case e: IOException if ignoreCorruptFiles =>
@@ -273,12 +285,16 @@ class HadoopRDD[K, V](
             null
         }
       // Register an on-task-completion callback to close the input stream.
+      // 为Task添加完成监听器，在Task完成时关闭迭代器
       context.addTaskCompletionListener{ context => closeIfNeeded() }
+      // 读取的数据的键类型和值对象，对于LineRecordReader，键为LongWritable，表示偏移量，值为Text，表示一行的数据
       private val key: K = if (reader == null) null.asInstanceOf[K] else reader.createKey()
       private val value: V = if (reader == null) null.asInstanceOf[V] else reader.createValue()
 
+      // 定义NextIterator的获取下一组数据的getNext()方法，用于读取下一组键值对数据
       override def getNext(): (K, V) = {
         try {
+          // 通过RecordReader读取，返回值表示是否已读完
           finished = !reader.next(key, value)
         } catch {
           case e: IOException if ignoreCorruptFiles =>
@@ -294,8 +310,10 @@ class HadoopRDD[K, V](
         (key, value)
       }
 
+      // 关闭方法
       override def close() {
         if (reader != null) {
+          // 取消输入文件路径的记录
           InputFileNameHolder.unsetInputFileName()
           // Close the reader and release it. Note: it's very important that we don't close the
           // reader more than once, since that exposes us to MAPREDUCE-5918 when running against
@@ -327,6 +345,11 @@ class HadoopRDD[K, V](
         }
       }
     }
+
+    /**
+     * 将创建的NextIterator迭代器包装为InterruptibleIterator
+     * 该迭代器添加了中断功能，可以通过TaskContxt是否被中断来决定是否中断迭代操作
+     */
     new InterruptibleIterator[(K, V)](context, iter)
   }
 
