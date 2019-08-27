@@ -70,6 +70,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
 
   private static final ClassTag<Object> OBJECT_CLASS_TAG = ClassTag$.MODULE$.Object();
 
+  // 默认的排序缓冲区初始化大小
   @VisibleForTesting
   static final int DEFAULT_INITIAL_SORT_BUFFER_SIZE = 4096;
 
@@ -88,7 +89,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   private final SparkConf sparkConf;
   // 是否采用NIO的从文件流到文件流的复制方式，可以通过spark.file.transferTo属性配置，默认为true
   private final boolean transferToEnabled;
-  // 初始化的排序缓冲大小，可以通过spark.shuffle.sort.initialBufferSize属性配置，默认为4096
+  // 初始化时的排序缓冲大小，可以通过spark.shuffle.sort.initialBufferSize属性配置，默认为4096
   private final int initialSortBufferSize;
 
   @Nullable private MapStatus mapStatus;
@@ -124,27 +125,38 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       int mapId,
       TaskContext taskContext,
       SparkConf sparkConf) throws IOException {
+    /**
+     * 由于UnsafeShuffleWriter是SerializedShuffleHandle对应的序列化模式下的ShuffleWriter，
+     * 所以需要检查分区器的分区总数，不可大于16777216
+     */
     final int numPartitions = handle.dependency().partitioner().numPartitions();
     if (numPartitions > SortShuffleManager.MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE()) {
+      // 分区总数大于16777216，抛异常
       throw new IllegalArgumentException(
         "UnsafeShuffleWriter can only be used for shuffles with at most " +
         SortShuffleManager.MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE() +
         " reduce partitions");
     }
     this.blockManager = blockManager;
+    // 用于操作索引文件与数据文件
     this.shuffleBlockResolver = shuffleBlockResolver;
     this.memoryManager = memoryManager;
     this.mapId = mapId;
     final ShuffleDependency<K, V, V> dep = handle.dependency();
     this.shuffleId = dep.shuffleId();
+    // 序列化器
     this.serializer = dep.serializer().newInstance();
+    // 分区器
     this.partitioner = dep.partitioner();
     this.writeMetrics = taskContext.taskMetrics().shuffleWriteMetrics();
     this.taskContext = taskContext;
     this.sparkConf = sparkConf;
+    // 是否允许transferTo操作，默认允许
     this.transferToEnabled = sparkConf.getBoolean("spark.file.transferTo", true);
+    // 初始状态的排序缓冲区大小，默认为4096字节，即4K
     this.initialSortBufferSize = sparkConf.getInt("spark.shuffle.sort.initialBufferSize",
                                                   DEFAULT_INITIAL_SORT_BUFFER_SIZE);
+    // 调用open()方法
     open();
   }
 
@@ -210,15 +222,20 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
 
   private void open() throws IOException {
     assert (sorter == null);
+    // 创建外部Shuffle排序器
     sorter = new ShuffleExternalSorter(
       memoryManager,
       blockManager,
       taskContext,
+      // 初始化缓冲大小
       initialSortBufferSize,
+      // 分区总数
       partitioner.numPartitions(),
       sparkConf,
       writeMetrics);
+    // 序列化缓冲
     serBuffer = new MyByteArrayOutputStream(1024 * 1024);
+    // 包装为序列化流对象
     serOutputStream = serializer.serializeStream(serBuffer);
   }
 
@@ -260,6 +277,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), partitionLengths);
   }
 
+  // 将记录插入到排序器
   @VisibleForTesting
   void insertRecordIntoSorter(Product2<K, V> record) throws IOException {
     assert(sorter != null);

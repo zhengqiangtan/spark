@@ -76,8 +76,8 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
         while (buf.remaining() != 0) {
           if (channel.read(buf) == -1) { // 读取到-1说明读完了
             throw new IOException(String.format("Reached EOF before filling buffer\n" +
-              "offset=%s\nfile=%s\nbuf.remaining=%s",
-              offset, file.getAbsoluteFile(), buf.remaining()));
+                            "offset=%s\nfile=%s\nbuf.remaining=%s",
+                    offset, file.getAbsoluteFile(), buf.remaining()));
           }
         }
         // 切换buffer为写模式并返回
@@ -92,7 +92,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
         if (channel != null) {
           long size = channel.size();
           throw new IOException("Error in reading " + this + " (actual file length " + size + ")",
-            e);
+                  e);
         }
       } catch (IOException ignored) {
         // ignore
@@ -143,6 +143,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     return this;
   }
 
+  // 将缓冲区的数据转换为Netty的对象，用来将数据写到外部
   @Override
   public Object convertToNetty() throws IOException {
     if (conf.lazyFileDescriptor()) { // 以懒加载的方式初始化FileDescriptor

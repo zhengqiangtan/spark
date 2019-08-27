@@ -69,6 +69,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
   private static final Logger logger = LoggerFactory.getLogger(ShuffleExternalSorter.class);
 
+  // 磁盘写缓冲大小，即1M
   @VisibleForTesting
   static final int DISK_WRITE_BUFFER_SIZE = 1024 * 1024;
 
@@ -76,6 +77,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   private final int numPartitions;
   private final TaskMemoryManager taskMemoryManager;
   private final BlockManager blockManager;
+  // Task任务上下文
   private final TaskContext taskContext;
 
   // 对Shuffle写入（也就是map任务输出到磁盘）的度量，即Shuffle WriteMetrics。
@@ -93,7 +95,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   /** The buffer size to use when writing spills using DiskBlockObjectWriter
    * 创建的DiskBlockObjectWriter内部的文件缓冲大小。
    * 可通过spark.shuffle.file.buffer属性进行配置，默认是32KB。
-   **/
+   */
   private final int fileBufferSizeBytes;
 
   /**
@@ -111,7 +113,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
   /** Peak memory used by this sorter so far, in bytes.
    * 内存中数据结构大小的峰值（单位为字节）。
-   **/
+   */
   private long peakMemoryUsedBytes;
 
   // These variables are reset after spilling:
@@ -138,10 +140,13 @@ final class ShuffleExternalSorter extends MemoryConsumer {
     this.taskContext = taskContext;
     this.numPartitions = numPartitions;
     // Use getSizeAsKb (not bytes) to maintain backwards compatibility if no units are provided
+    // 文件缓冲区大小，默认为32M
     this.fileBufferSizeBytes = (int) conf.getSizeAsKb("spark.shuffle.file.buffer", "32k") * 1024;
+    // 溢写阈值，默认为1G，即，当数据条数超过该值时，会溢写到磁盘
     this.numElementsForSpillThreshold =
       conf.getLong("spark.shuffle.spill.numElementsForceSpillThreshold", 1024 * 1024 * 1024);
     this.writeMetrics = writeMetrics;
+    // 内存排序器，spark.shuffle.sort.useRadixSort参数用于指定是否使用基数排序，默认为true
     this.inMemSorter = new ShuffleInMemorySorter(
       this, initialSize, conf.getBoolean("spark.shuffle.sort.useRadixSort", true));
     this.peakMemoryUsedBytes = getMemoryUsage();
@@ -151,9 +156,12 @@ final class ShuffleExternalSorter extends MemoryConsumer {
    * Sorts the in-memory records and writes the sorted records to an on-disk file.
    * This method does not free the sort data structures.
    *
+   * 将内存中的记录进行排序，并将排序后的记录写出到磁盘文件中。
+   *
    * @param isLastFile if true, this indicates that we're writing the final output file and that the
    *                   bytes written should be counted towards shuffle spill metrics rather than
    *                   shuffle write metrics.
+   *                   如果为true表示写的是最后一个输出文件
    */
   private void writeSortedFile(boolean isLastFile) throws IOException {
 
@@ -161,6 +169,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
     if (isLastFile) {
       // We're writing the final non-spill file, so we _do_ want to count this as shuffle bytes.
+      // 最后一次写文件操作，需要计算本次的写出数据作为Shuffle操作的数据量
       writeMetricsToUse = writeMetrics;
     } else {
       // We're spilling, so bytes written should be counted towards spill rather than write.
@@ -170,6 +179,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
     }
 
     // This call performs the actual sort.
+    // 获取基于内存的Shuffle排序迭代器
     final ShuffleInMemorySorter.ShuffleSorterIterator sortedRecords =
       inMemSorter.getSortedIterator();
 

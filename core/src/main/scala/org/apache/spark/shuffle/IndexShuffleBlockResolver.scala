@@ -37,12 +37,12 @@ import org.apache.spark.util.Utils
  *
  * We use the name of the shuffle data's shuffleBlockId with reduce ID set to 0 and add ".data"
  * as the filename postfix for data file, and ".index" as the filename postfix for index file.
-  *
-  * 特质ShuffleBlockResolver定义了对Shuffle Block进行解析的规范，
-  * 包括获取Shuffle数据文件、获取Shuffle索引文件、删除指定的Shuffle数据文件和索引文件、生成Shuffle索引文件、获取Shuffle块的数据等。
-  *
-  * ShuffleBlockResolver目前只有IndexShuffleBlockResolver这唯一的实现类。
-  * IndexShuffleBlockResolver用于创建和维护Shuffle Block与物理文件位置之间的映射关系。
+ *
+ * 特质ShuffleBlockResolver定义了对Shuffle Block进行解析的规范，
+ * 包括获取Shuffle数据文件、获取Shuffle索引文件、删除指定的Shuffle数据文件和索引文件、生成Shuffle索引文件、获取Shuffle块的数据等。
+ *
+ * ShuffleBlockResolver目前只有IndexShuffleBlockResolver这唯一的实现类。
+ * IndexShuffleBlockResolver用于创建和维护Shuffle Block与物理文件位置之间的映射关系。
  *
  */
 // Note: Changes to the format in this file should be kept in sync with
@@ -56,10 +56,10 @@ private[spark] class IndexShuffleBlockResolver(
   private lazy val blockManager = Option(_blockManager).getOrElse(SparkEnv.get.blockManager)
 
   /**
-    * 即与Shuffle相关的TransportConf。
-    * 用于对Shuffle客户端传输线程数（spark.shuffle.io.clientThreads属性）和
-    * Shuffle服务端传输线程数（spark.shuffle.io.serverThreads属性）进行读取。
-    */
+   * 即与Shuffle相关的TransportConf。
+   * 用于对Shuffle客户端传输线程数（spark.shuffle.io.clientThreads属性）和
+   * Shuffle服务端传输线程数（spark.shuffle.io.serverThreads属性）进行读取。
+   */
   private val transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle")
 
   // 用于获取Shuffle数据文件
@@ -74,9 +74,9 @@ private[spark] class IndexShuffleBlockResolver(
 
   /**
    * Remove data file and index file that contain the output data from one map.
-    *
-    * 用于删除Shuffle过程中包含指定map任务输出数据的Shuffle数据文件和索引文件
-   * */
+   *
+   * 用于删除Shuffle过程中包含指定map任务输出数据的Shuffle数据文件和索引文件
+   */
   def removeDataByMap(shuffleId: Int, mapId: Int): Unit = {
     // 获取指定Shuffle中指定map任务输出的数据文件
     var file = getDataFile(shuffleId, mapId)
@@ -98,14 +98,24 @@ private[spark] class IndexShuffleBlockResolver(
   /**
    * Check whether the given index and data files match each other.
    * If so, return the partition lengths in the data file. Otherwise return null.
+   *
+   * 检查给定的索引文件和数据文件是否能互相匹配，
+   * 如果能匹配则返回数据文件的每个分区的长度组成的数组，否则返回null
    */
   private def checkIndexAndDataFile(index: File, data: File, blocks: Int): Array[Long] = {
     // the index file should have `block + 1` longs as offset.
+    /**
+     * 检查索引文件长度，其长度需要是 (数据块数量 + 1) * 8，
+     * 索引值为Long型，占8个字节，
+     * 索引文件头的8个字节为标记值，即Long型整数0，不算索引值
+     */
     if (index.length() != (blocks + 1) * 8) {
       return null
     }
+    // 创建数据块数量大小的数组
     val lengths = new Array[Long](blocks)
     // Read the lengths of blocks
+    // 得到索引文件的输入流
     val in = try {
       new DataInputStream(new NioBufferedFileInputStream(index))
     } catch {
@@ -114,14 +124,19 @@ private[spark] class IndexShuffleBlockResolver(
     }
     try {
       // Convert the offsets into lengths of each block
+      // 读取第一个Long型整数
       var offset = in.readLong()
+      // 第一个Long型整数标记值必须为0，如果不为0，则直接返回null
       if (offset != 0L) {
         return null
       }
       var i = 0
       while (i < blocks) {
+        // 读取Long型偏移量
         val off = in.readLong()
+        // 记录对应的数据块长度
         lengths(i) = off - offset
+        // offset更新
         offset = off
         i += 1
       }
@@ -133,7 +148,9 @@ private[spark] class IndexShuffleBlockResolver(
     }
 
     // the size of data file should match with index file
+    // 数据文件的长度，等于lengths数组所有元素之和，表示校验成功
     if (data.length() == lengths.sum) {
+      // 返回lengths数组
       lengths
     } else {
       null
@@ -149,9 +166,9 @@ private[spark] class IndexShuffleBlockResolver(
    * replace them with new ones.
    *
    * Note: the `lengths` will be updated to match the existing index file if use the existing ones.
-    *
-    * 用于将每个Block的偏移量写入索引文件，并在最后增加一个表示输出文件末尾的偏移量。
-   * */
+   *
+   * 用于将每个Block的偏移量写入索引文件
+   */
   def writeIndexFileAndCommit(
       shuffleId: Int,
       mapId: Int,
@@ -162,15 +179,18 @@ private[spark] class IndexShuffleBlockResolver(
     // 根据索引文件获取临时索引文件的路径
     val indexTmp = Utils.tempFileWith(indexFile)
     try {
-      // 构建输出流
+      // 构建临时文件的输出流
       val out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(indexTmp)))
       Utils.tryWithSafeFinally {
         // We take in lengths of each block, need to convert it to offsets.
+        // 写入临时索引文件的第一个标记值，即Long型整数0
         var offset = 0L
         out.writeLong(offset)
-        // 遍历每个Block的长度，并作为偏移量写入临时索引文件
+        // 遍历每个数据块的长度，并作为偏移量写入临时索引文件
         for (length <- lengths) {
+          // 在原有offset上加上数据块的长度
           offset += length
+          // 写入临时文件
           out.writeLong(offset)
         }
       } {
@@ -181,20 +201,30 @@ private[spark] class IndexShuffleBlockResolver(
       val dataFile = getDataFile(shuffleId, mapId)
       // There is only one IndexShuffleBlockResolver per executor, this synchronization make sure
       // the following check and rename are atomic.
-      synchronized {
-        // 对给定的索引文件和数据文件是否匹配进行检查
+      synchronized { // 主要该步骤是加锁的
+        /**
+         * 检查indexFile文件、dataFile文件及数据块的长度是否，
+         * 注意，这里传入的不是临时索引文件indexTmp
+         * 这个操作是为了检查可能已经存在的索引文件与数据文件是否匹配，
+         * 如果检查发现时匹配的，则说明有其他的TaskAttempt已经完成了该Map任务的写出，
+         * 那么此时产生的临时索引文件就无用了。
+         * 注意，由于当前代码块是使用synchronized同步的，因此不用担心并发问题，
+         * 同一个时间点只会有一个TaskAttempt成功写出数据。
+         */
         val existingLengths = checkIndexAndDataFile(indexFile, dataFile, lengths.length)
-        if (existingLengths != null) {
+        if (existingLengths != null) { // 如果匹配
           // Another attempt for the same task has already written our map outputs successfully,
           // so just use the existing partition lengths and delete our temporary map outputs.
+          // 将checkIndexAndDataFile()方法记录的数据文件的每个分区的长度组成的数组复制到lengths数组中
           System.arraycopy(existingLengths, 0, lengths, 0, lengths.length)
           if (dataTmp != null && dataTmp.exists()) {
-            // 索引文件和数据文件不匹配，所以将临时索引文件和临时数据文件删除
+            // 将临时索引文件删除
             dataTmp.delete()
           }
+          // 将临时索引文件删除
           indexTmp.delete()
-        } else {
-          // 索引文件和数据文件匹配，将临时的索引文件和数据文件作为正式的索引文件和数据文件
+        } else { // 如果不匹配，说明当前还没有其他的TaskAttempt进行索引文件的写入，本次操作产生的临时索引文件可以用
+          // 将indexFile和dataFile删除
           // This is the first successful attempt in writing the map outputs for this task,
           // so override any existing index and data files with the ones we wrote.
           if (indexFile.exists()) {
@@ -203,6 +233,7 @@ private[spark] class IndexShuffleBlockResolver(
           if (dataFile.exists()) {
             dataFile.delete()
           }
+          // 临时的索引文件和数据文件作为正式的索引文件和数据文件
           // 将indexTmp重命名为indexFile
           if (!indexTmp.renameTo(indexFile)) {
             throw new IOException("fail to rename file " + indexTmp + " to " + indexFile)
@@ -214,6 +245,7 @@ private[spark] class IndexShuffleBlockResolver(
         }
       }
     } finally {
+      // 如果临时索引文件还存在，一定要将其删除
       if (indexTmp.exists() && !indexTmp.delete()) {
         logError(s"Failed to delete temporary index file at ${indexTmp.getAbsolutePath}")
       }
@@ -229,15 +261,22 @@ private[spark] class IndexShuffleBlockResolver(
     // 读取索引文件的输入流
     val in = new DataInputStream(new FileInputStream(indexFile))
     try {
-      // 跳过与当前reduce任务无关的字节
+      /**
+       * 跳过与当前Reduce任务无关的字节，可见，
+       * 在索引文件中是按照Reduce任务ID的顺序记录每个Reduce对应的数据块的索引数据的。
+       */
       ByteStreams.skipFully(in, blockId.reduceId * 8)
+      // 读取偏移量
       val offset = in.readLong()
+      // 读取下一个偏移量
       val nextOffset = in.readLong()
       // 构造并返回FileSegmentManagedBuffer
       new FileSegmentManagedBuffer(
         transportConf,
         getDataFile(blockId.shuffleId, blockId.mapId),
+        // 读取的起始偏移量为offset
         offset,
+        // 读取长度为nextOffset - offset
         nextOffset - offset)
     } finally {
       in.close()

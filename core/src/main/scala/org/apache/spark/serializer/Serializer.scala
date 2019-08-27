@@ -99,10 +99,10 @@ abstract class Serializer {
    * or called in user code and is subject to removal in future Spark releases.
    *
    * See SPARK-7311 for more details.
-    * 参数如果是true，则表示该序列化器支持重新定位他的序列化对象，否则则不行。
-    * 如果支持，这表示在流中输出的被序列化的对象的字节可以进行排序。这相当于对象排序后再进行序列化。
-    * 该属性现在被用于判断Shuffle使用哪个ShuffleWriter。
-    *
+   * 参数如果是true，则表示该序列化器支持重新定位他的序列化对象，否则则不行。
+   * 如果支持，这表示在流中输出的被序列化的对象的字节可以进行排序。这相当于对象排序后再进行序列化。
+   * 该属性现在被用于判断Shuffle使用哪个ShuffleWriter。
+   *
    */
   @Private
   private[spark] def supportsRelocationOfSerializedObjects: Boolean = false

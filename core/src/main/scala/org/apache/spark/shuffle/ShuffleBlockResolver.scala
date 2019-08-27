@@ -33,6 +33,7 @@ trait ShuffleBlockResolver {
   /**
    * Retrieve the data for the specified block. If the data for that block is not available,
    * throws an unspecified exception.
+   * 获取指定ShuffleBlockId对应的数据块的数据
    */
   def getBlockData(blockId: ShuffleBlockId): ManagedBuffer
 

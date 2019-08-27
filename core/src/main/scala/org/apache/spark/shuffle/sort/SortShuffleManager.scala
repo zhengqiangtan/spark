@@ -87,12 +87,13 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
    */
   private[this] val numMapsForShuffle = new ConcurrentHashMap[Int, Int]()
 
+  // IndexShuffleBlockResolver用于创建和维护Shuffle产生的数据块与物理文件位置之间的映射关系
   override val shuffleBlockResolver = new IndexShuffleBlockResolver(conf)
 
   /**
    * Register a shuffle with the manager and obtain a handle for it to pass to tasks.
-    *
-    * 用于根据条件创建不同的ShuffleHandle实例。
+   *
+   * 用于根据条件创建不同的ShuffleHandle实例。
    */
   override def registerShuffle[K, V, C](
       shuffleId: Int,
@@ -123,9 +124,9 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   /**
    * Get a reader for a range of reduce partitions (startPartition to endPartition-1, inclusive).
    * Called on executors by reduce tasks.
-    *
-    * 用于获取对map任务输出的分区数据文件中从startPartition到endPartition-1范围内的数据
-    * 进行读取的读取器（即BlockStoreShuffleReader），供reduce任务使用。
+   *
+   * 用于获取对map任务输出的分区数据文件中从startPartition到endPartition-1范围内的数据
+   * 进行读取的读取器（即BlockStoreShuffleReader），供reduce任务使用。
    */
   override def getReader[K, C](
       handle: ShuffleHandle,
@@ -137,8 +138,12 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   }
 
   /** Get a writer for a given partition. Called on executors by map tasks.
-    * 用于根据ShuffleHandle获取ShuffleWriter。
-    **/
+   * 用于根据ShuffleHandle获取ShuffleWriter。
+   *
+   * @param handle ShuffleDependency具体的ShuffleHandle
+   * @param mapId Map任务ID，一般是分区的ID
+   * @param context TaskContext上下文对象
+   */
   override def getWriter[K, V](
       handle: ShuffleHandle,
       mapId: Int,
@@ -174,8 +179,8 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   }
 
   /** Remove a shuffle's metadata from the ShuffleManager.
-    * 用于根据指定的shuffleId删除此Shuffle过程的所有map任务的数据文件和索引文件
-    **/
+   * 用于根据指定的shuffleId删除此Shuffle过程的所有map任务的数据文件和索引文件
+   */
   override def unregisterShuffle(shuffleId: Int): Boolean = {
     Option(numMapsForShuffle.remove(shuffleId)).foreach { numMaps =>
       (0 until numMaps).foreach { mapId =>
@@ -201,29 +206,47 @@ private[spark] object SortShuffleManager extends Logging {
    * since it's extremely unlikely that a single shuffle produces over 16 million output partitions.
    * */
   val MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE =
-    PackedRecordPointer.MAXIMUM_PARTITION_ID + 1
+    PackedRecordPointer.MAXIMUM_PARTITION_ID + 1 // 16777216
 
   /**
    * Helper method for determining whether a shuffle should use an optimized serialized shuffle
    * path or whether it should fall back to the original path that operates on deserialized objects.
+   *
+   * Shuffle是否可以序列化
    */
   def canUseSerializedShuffle(dependency: ShuffleDependency[_, _, _]): Boolean = {
+    // Shuffle ID和分区数量
     val shufId = dependency.shuffleId
     val numPartitions = dependency.partitioner.numPartitions
     if (!dependency.serializer.supportsRelocationOfSerializedObjects) {
+      /**
+       * 如果ShuffleDependency的序列化器不支持重新定位序列化对象，也即是说，
+       * ShuffleDependency的序列化器无法对流中输出的序列化后的对象的字节进行排序，则返回false。
+       * 这是使用序列化排序模式需要满足的第2个条件。
+       */
       log.debug(s"Can't use serialized shuffle for shuffle $shufId because the serializer, " +
         s"${dependency.serializer.getClass.getName}, does not support object relocation")
       false
     } else if (dependency.aggregator.isDefined) {
+      /**
+       * ShuffleDependency指定了聚合器，说明存在聚合操作，则返回false。
+       * 这是使用序列化排序模式需要满足的第1个条件。
+       */
       log.debug(
         s"Can't use serialized shuffle for shuffle $shufId because an aggregator is defined")
       false
     } else if (numPartitions > MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE) {
       log.debug(s"Can't use serialized shuffle for shuffle $shufId because it has more than " +
         s"$MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE partitions")
+
+      /**
+       * Shuffle过程产生的分区数大于MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE（16777216），
+       * 则返回false。这是使用序列化排序模式需要满足的第3个条件。
+       */
       false
     } else {
       log.debug(s"Can use serialized shuffle for shuffle $shufId")
+      // 三个条件都满足，返回true
       true
     }
   }
@@ -232,8 +255,8 @@ private[spark] object SortShuffleManager extends Logging {
 /**
  * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
  * serialized shuffle.
-  *
-  * 用于确定何时选择使用序列化的Shuffle
+ *
+ * 用于确定何时选择使用序列化的Shuffle
  */
 private[spark] class SerializedShuffleHandle[K, V](
   shuffleId: Int,
@@ -245,8 +268,8 @@ private[spark] class SerializedShuffleHandle[K, V](
 /**
  * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
  * bypass merge sort shuffle path.
-  *
-  * 用于确定何时选择绕开合并和排序的Shuffle路径
+ *
+ * 用于确定何时选择绕开合并和排序的Shuffle路径
  */
 private[spark] class BypassMergeSortShuffleHandle[K, V](
   shuffleId: Int,

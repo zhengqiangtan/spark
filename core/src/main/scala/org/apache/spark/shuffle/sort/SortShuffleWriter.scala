@@ -137,14 +137,14 @@ private[spark] object SortShuffleWriter {
   // 用于判断是否绕开合并和排序
   def shouldBypassMergeSort(conf: SparkConf, dep: ShuffleDependency[_, _, _]): Boolean = {
     // We cannot bypass sorting if we need to do map-side aggregation.
-    if (dep.mapSideCombine) {
+    if (dep.mapSideCombine) { // 启用了Map端Combine，则不可使用BypassMergeSort
       require(dep.aggregator.isDefined, "Map-side combine without Aggregator specified!")
       false
     } else {
       /**
-        * 如果ShuffleDependency的mapSideCombine属性为false，
-        * 且ShuffleDependency的分区计算器中的分区数量小于等于bypassMergeThreshold，返回true
-        */
+       * 如果ShuffleDependency的mapSideCombine属性为false，
+       * 且ShuffleDependency的分区计算器中的分区数量小于等于bypassMergeThreshold，返回true
+       */
       val bypassMergeThreshold: Int = conf.getInt("spark.shuffle.sort.bypassMergeThreshold", 200)
       dep.partitioner.numPartitions <= bypassMergeThreshold
     }
