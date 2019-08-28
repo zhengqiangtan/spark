@@ -26,72 +26,72 @@ import org.apache.spark.unsafe.memory.MemoryBlock;
 import org.apache.spark.util.collection.Sorter;
 import org.apache.spark.util.collection.unsafe.sort.RadixSort;
 
-final class ShuffleInMemorySorter {
+  final class ShuffleInMemorySorter {
 
-  /**
-   * 比较器，比较的对象是PackedRecordPointer
-   * PackedRecordPointer中记录了分区号，页号及偏移量
-   */
-  private static final class SortComparator implements Comparator<PackedRecordPointer> {
-    @Override
-    public int compare(PackedRecordPointer left, PackedRecordPointer right) {
-      // 获取两个分区的ID
-      int leftId = left.getPartitionId();
-      int rightId = right.getPartitionId();
-      // 使用分区ID进行比较
-      return leftId < rightId ? -1 : (leftId > rightId ? 1 : 0);
+    /**
+     * 比较器，比较的对象是PackedRecordPointer
+     * PackedRecordPointer中记录了分区号，页号及偏移量
+     */
+    private static final class SortComparator implements Comparator<PackedRecordPointer> {
+      @Override
+      public int compare(PackedRecordPointer left, PackedRecordPointer right) {
+        // 获取两个分区的ID
+        int leftId = left.getPartitionId();
+        int rightId = right.getPartitionId();
+        // 使用分区ID进行比较
+        return leftId < rightId ? -1 : (leftId > rightId ? 1 : 0);
+      }
     }
-  }
 
-  // 默认使用SortComparator比较器
-  private static final SortComparator SORT_COMPARATOR = new SortComparator();
+    // 默认使用SortComparator比较器
+    private static final SortComparator SORT_COMPARATOR = new SortComparator();
 
-  // 内存消费者，用于申请和释放内存
-  private final MemoryConsumer consumer;
+    // 内存消费者，用于申请和释放内存
+    private final MemoryConsumer consumer;
 
-  /**
-   * An array of record pointers and partition ids that have been encoded by
-   * {@link PackedRecordPointer}. The sort operates on this array instead of directly manipulating
-   * records.
-   *
-   * Only part of the array will be used to store the pointers, the rest part is preserved as
-   * temporary buffer for sorting.
-   *
-   * 申请的内存的主要表现方式；排序器将操作该对象，代替直接操作记录
-   */
-  private LongArray array;
+    /**
+     * An array of record pointers and partition ids that have been encoded by
+     * {@link PackedRecordPointer}. The sort operates on this array instead of directly manipulating
+     * records.
+     *
+     * Only part of the array will be used to store the pointers, the rest part is preserved as
+     * temporary buffer for sorting.
+     *
+     * 申请的内存的主要表现方式；排序器将操作该对象，代替直接操作记录
+     */
+    private LongArray array;
 
-  /**
-   * Whether to use radix sort for sorting in-memory partition ids. Radix sort is much faster
-   * but requires additional memory to be reserved memory as pointers are added.
-   *
-   * 是否使用基数排序；基数排序比较快，但需要额外的内存。
-   */
-  private final boolean useRadixSort;
+    /**
+     * Whether to use radix sort for sorting in-memory partition ids. Radix sort is much faster
+     * but requires additional memory to be reserved memory as pointers are added.
+     *
+     * 是否使用基数排序；基数排序比较快，但需要额外的内存。
+     */
+    private final boolean useRadixSort;
 
-  /**
-   * The position in the pointer array where new records can be inserted.
-   */
-  private int pos = 0;
+    /**
+     * The position in the pointer array where new records can be inserted.
+     */
+    private int pos = 0;
 
-  /**
-   * How many records could be inserted, because part of the array should be left for sorting.
-   */
-  private int usableCapacity = 0;
+    /**
+     * How many records could be inserted, because part of the array should be left for sorting.
+     */
+    private int usableCapacity = 0;
 
-  // 初始的排序缓冲大小
-  private int initialSize;
+    // 初始的排序缓冲大小
+    private int initialSize;
 
-  ShuffleInMemorySorter(MemoryConsumer consumer, int initialSize, boolean useRadixSort) {
-    this.consumer = consumer;
-    assert (initialSize > 0);
-    this.initialSize = initialSize;
-    this.useRadixSort = useRadixSort;
-    // 直接申请初始大小的内存
-    this.array = consumer.allocateArray(initialSize);
-    // 初始化可用内存容量，当使用基数排序时为申请内存的1/2，否则为申请内存的1/1.5
-    this.usableCapacity = getUsableCapacity();
-  }
+    ShuffleInMemorySorter(MemoryConsumer consumer, int initialSize, boolean useRadixSort) {
+      this.consumer = consumer;
+      assert (initialSize > 0);
+      this.initialSize = initialSize;
+      this.useRadixSort = useRadixSort;
+      // 直接申请初始大小的内存
+      this.array = consumer.allocateArray(initialSize);
+      // 初始化可用内存容量，当使用基数排序时为申请内存的1/2，否则为申请内存的1/1.5
+      this.usableCapacity = getUsableCapacity();
+    }
 
   // 计算可用容量
   private int getUsableCapacity() {
@@ -189,7 +189,7 @@ final class ShuffleInMemorySorter {
   /**
    * An iterator-like class that's used instead of Java's Iterator in order to facilitate inlining.
    *
-   * 迭代器，
+   * 索引记录的迭代器
    */
   public static final class ShuffleSorterIterator {
 
@@ -204,7 +204,7 @@ final class ShuffleInMemorySorter {
      * 构建迭代器
      * @param numRecords 记录条数
      * @param pointerArray 用于记录数据的LongArray
-     * @param startingPosition 起始postition
+     * @param startingPosition 迭代的起始记录的位置索引
      */
     ShuffleSorterIterator(int numRecords, LongArray pointerArray, int startingPosition) {
       this.limit = numRecords + startingPosition;
@@ -239,7 +239,7 @@ final class ShuffleInMemorySorter {
         PackedRecordPointer.PARTITION_ID_START_BYTE_INDEX,
         PackedRecordPointer.PARTITION_ID_END_BYTE_INDEX, false, false);
     } else {
-      // 普通排序
+      // 普通TimSort排序
       MemoryBlock unused = new MemoryBlock(
         array.getBaseObject(),
         array.getBaseOffset() + pos * 8L,
@@ -251,6 +251,7 @@ final class ShuffleInMemorySorter {
       // 使用SORT_COMPARATOR，即SortComparator比较器
       sorter.sort(array, 0, pos, SORT_COMPARATOR);
     }
+    // 构造为ShuffleSorterIterator后返回
     return new ShuffleSorterIterator(pos, array, offset);
   }
 }

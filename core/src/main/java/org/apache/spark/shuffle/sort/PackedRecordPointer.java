@@ -32,7 +32,7 @@ package org.apache.spark.shuffle.sort;
  * Assuming word-alignment would allow for a 1 gigabyte maximum page size, but we leave this
  * optimization to future work as it will require more careful design to ensure that addresses are
  * properly aligned (e.g. by padding records).
- *
+ * <p>
  * 使用64 bit的long型变量记录Record信息，分为三个部分：
  * [24 bit 分区号][13 bit 内存页号][27 bit 内存偏移量]
  * 我们知道在TaskMemoryManager中，使用13位表示内存页号，使用51位表示偏移量；

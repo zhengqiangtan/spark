@@ -69,6 +69,7 @@ public final class LongArray {
    * Fill this all with 0L.
    */
   public void zeroOut() {
+    // 使用0L填充baseObj的每个数据位位
     for (long off = baseOffset; off < baseOffset + length * WIDTH; off += WIDTH) {
       Platform.putLong(baseObj, off, 0);
     }
@@ -80,6 +81,7 @@ public final class LongArray {
   public void set(int index, long value) {
     assert index >= 0 : "index (" + index + ") should >= 0";
     assert index < length : "index (" + index + ") should < length (" + length + ")";
+    // 插入到baseObj的指定位置，baseObj就是MemoryBlock的obj
     Platform.putLong(baseObj, baseOffset + index * WIDTH, value);
   }
 
@@ -89,6 +91,7 @@ public final class LongArray {
   public long get(int index) {
     assert index >= 0 : "index (" + index + ") should >= 0";
     assert index < length : "index (" + index + ") should < length (" + length + ")";
+    // 获取指定数据位位上的Long型数据
     return Platform.getLong(baseObj, baseOffset + index * WIDTH);
   }
 }

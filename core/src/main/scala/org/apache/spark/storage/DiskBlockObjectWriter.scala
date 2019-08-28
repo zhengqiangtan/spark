@@ -179,8 +179,8 @@ private[spark] class DiskBlockObjectWriter(
   /**
    * Flush the partial writes and commit them as a single atomic block.
    * A commit may write additional bytes to frame the atomic block.
-    *
-    * 将输出流中的数据写入到磁盘。
+   *
+   * 将输出流中的数据写入到磁盘。
    *
    * @return file segment with previous offset and length committed on this call.
    */
