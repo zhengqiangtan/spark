@@ -82,19 +82,19 @@ import org.apache.spark.storage.{BlockId, DiskBlockObjectWriter}
  *
  *  - Users are expected to call stop() at the end to delete all the intermediate files.
  *
-  * @param context TaskContextImpl实现类
-  * @param aggregator optional Aggregator with combine functions to use for merging data
-  *                   对map任务的输出数据进行聚合的聚合器
-  * @param partitioner optional Partitioner; if given, sort by partition ID and then key
-  *                    对map任务的输出数据按照key计算分区的分区计算器Partitioner
-  * @param ordering optional Ordering to sort keys within each partition; should be a total ordering
-  *                 对map任务的输出数据按照key进行排序的scala.math.Ordering的实现类
-  * @param serializer serializer to use when spilling to disk
-  *                   即SparkEnv的子组件serializer
-  * @tparam K
-  * @tparam V
-  * @tparam C
-  */
+ * @param context     TaskContextImpl实现类
+ * @param aggregator  optional Aggregator with combine functions to use for merging data
+ *                    对map任务的输出数据进行聚合的聚合器
+ * @param partitioner optional Partitioner; if given, sort by partition ID and then key
+ *                    对map任务的输出数据按照key计算分区的分区计算器Partitioner
+ * @param ordering    optional Ordering to sort keys within each partition; should be a total ordering
+ *                    对map任务的输出数据按照key进行排序的scala.math.Ordering的实现类
+ * @param serializer  serializer to use when spilling to disk
+ *                    即SparkEnv的子组件serializer
+ * @tparam K
+ * @tparam V
+ * @tparam C
+ */
 private[spark] class ExternalSorter[K, V, C](
     context: TaskContext,
     aggregator: Option[Aggregator[K, V, C]] = None,
@@ -143,14 +143,14 @@ private[spark] class ExternalSorter[K, V, C](
   // Aggregator set, we either put objects into an AppendOnlyMap where we combine them, or we
   // store them in an array buffer.
   /**
-    * 当设置了聚合器（Aggregator）时，map端将中间结果溢出到磁盘前，
-    * 先利用此数据结构在内存中对中间结果进行聚合处理。
-    */
+   * 当设置了聚合器（Aggregator）时，Map端将中间结果溢出到磁盘前，
+   * 先利用此数据结构在内存中对中间结果进行聚合处理。
+   */
   @volatile private var map = new PartitionedAppendOnlyMap[K, C]
   /**
-    * 当没有设置聚合器（Aggregator）时，map端将中间结果溢出到磁盘前，
-    * 先利用此数据结构将中间结果存储在内存中。
-    */
+   * 当没有设置聚合器（Aggregator）时，Map端将中间结果溢出到磁盘前，
+   * 先利用此数据结构将中间结果存储在内存中。
+   */
   @volatile private var buffer = new PartitionedPairBuffer[K, C]
 
   // Total spilling statistics
@@ -217,8 +217,8 @@ private[spark] class ExternalSorter[K, V, C](
   /**
    * Number of files this sorter has spilled so far.
    * Exposed for testing.
-    *
-    * numSpills方法用于返回spills的大小，即溢出的文件数量。
+   *
+   * numSpills方法用于返回spills的大小，即溢出的文件数量。
    */
   private[spark] def numSpills: Int = spills.size
 
@@ -234,9 +234,9 @@ private[spark] class ExternalSorter[K, V, C](
       val createCombiner = aggregator.get.createCombiner
       var kv: Product2[K, V] = null
       /**
-        * 定义偏函数，当有新的Value时，调用mergeValue函数将新的Value合并到之前聚合的结果中，
-        * 否则说明刚刚开始聚合，此时调用createCombiner函数以Value作为聚合的初始值
-        */
+       * 定义偏函数，当有新的Value时，调用mergeValue函数将新的Value合并到之前聚合的结果中，
+       * 否则说明刚刚开始聚合，此时调用createCombiner函数以Value作为聚合的初始值
+       */
       val update = (hadValue: Boolean, oldValue: C) => {
         if (hadValue) mergeValue(oldValue, kv._2) else createCombiner(kv._2)
       }
@@ -267,8 +267,8 @@ private[spark] class ExternalSorter[K, V, C](
 
   /**
    * Spill the current in-memory collection to disk if needed.
-    *
-    * 用于判断何时需要将内存中的数据写入磁盘
+   *
+   * 用于判断何时需要将内存中的数据写入磁盘
    *
    * @param usingMap whether we're using a map or buffer as our current in-memory collection
    */

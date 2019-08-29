@@ -26,18 +26,20 @@ import org.apache.spark.util.collection.WritablePartitionedPairCollection._
  * of its estimated size in bytes.
  *
  * The buffer can support up to `1073741823 (2 ^ 30 - 1)` elements.
-  *
-  * 将键值对缓存在内存中，并支持对元素进行排序的数据结构
-  *
-  * @param initialCapacity 初始容量值。如果未指定，默认为64
+ *
+ * 将键值对缓存在内存中，并支持对元素进行排序的数据结构
+ *
+ * @param initialCapacity 初始容量值。如果未指定，默认为64
  */
 private[spark] class PartitionedPairBuffer[K, V](initialCapacity: Int = 64)
   extends WritablePartitionedPairCollection[K, V] with SizeTracker
 {
   import PartitionedPairBuffer._
 
+  // 检查初始容量是否超限，2 ^ 30 - 1
   require(initialCapacity <= MAXIMUM_CAPACITY,
     s"Can't make capacity bigger than ${MAXIMUM_CAPACITY} elements")
+  // 同时初始容量要大于或等于1
   require(initialCapacity >= 1, "Invalid initial capacity")
 
   // Basic growable array data structure. We use a single array of AnyRef to hold both the keys
@@ -56,6 +58,7 @@ private[spark] class PartitionedPairBuffer[K, V](initialCapacity: Int = 64)
     if (curSize == capacity) { // 如果底层data数组已经满了，则对其进行扩容
       growArray()
     }
+    // 从存放方式可以看出，它是顺序进行存放，不考虑键重复的问题
     // 将key及其分区ID作为元组放入data数组
     data(2 * curSize) = (partition, key.asInstanceOf[AnyRef])
     // 将value放入data数组
@@ -90,13 +93,13 @@ private[spark] class PartitionedPairBuffer[K, V](initialCapacity: Int = 64)
     data = newArray
     // 将PartitionedPairBuffer的当前容量设置为新的容量大小
     capacity = newCapacity
-    // 对样本机械能重置，以便估算准确
+    // 使用SizeTracker的resetSamples()方法对样本进行重置，以便估算准确
     resetSamples()
   }
 
   /** Iterate through the data in a given order. For this class this is not really destructive.
-    * 根据给定的对key进行比较的比较器，返回对集合中的数据按照分区ID的顺序进行迭代的迭代器
-    **/
+   * 根据给定的对key进行比较的比较器，返回对集合中的数据按照分区ID的顺序进行迭代的迭代器
+   */
   override def partitionedDestructiveSortedIterator(keyComparator: Option[Comparator[K]])
     : Iterator[((Int, K), V)] = {
     // 生成比较器，如果没有指定，则使用partitionComparator生成比较器
@@ -116,6 +119,7 @@ private[spark] class PartitionedPairBuffer[K, V](initialCapacity: Int = 64)
       if (!hasNext) {
         throw new NoSuchElementException
       }
+      // 依次返回data数组中的键值对
       val pair = (data(2 * pos).asInstanceOf[(Int, K)], data(2 * pos + 1).asInstanceOf[V])
       pos += 1
       pair
@@ -124,6 +128,6 @@ private[spark] class PartitionedPairBuffer[K, V](initialCapacity: Int = 64)
 }
 
 private object PartitionedPairBuffer {
-  // 值为2^30-1。data数组的容量不能超过MAXIMUM_CAPACITY，以防止data数组溢出。
+  // 值为2^30 - 1。data数组的容量不能超过MAXIMUM_CAPACITY，以防止data数组溢出。
   val MAXIMUM_CAPACITY = Int.MaxValue / 2 // 2 ^ 30 - 1
 }
