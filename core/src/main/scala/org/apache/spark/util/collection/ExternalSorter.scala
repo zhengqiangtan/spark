@@ -91,9 +91,9 @@ import org.apache.spark.storage.{BlockId, DiskBlockObjectWriter}
  *                    对map任务的输出数据按照key进行排序的scala.math.Ordering的实现类
  * @param serializer  serializer to use when spilling to disk
  *                    即SparkEnv的子组件serializer
- * @tparam K
- * @tparam V
- * @tparam C
+ * @tparam K 键类型
+ * @tparam V 值类型
+ * @tparam C 聚合后的值类型
  */
 private[spark] class ExternalSorter[K, V, C](
     context: TaskContext,
@@ -951,9 +951,11 @@ private[spark] class ExternalSorter[K, V, C](
 
   /**
    * Return an iterator over all the data written to this object, aggregated by our aggregator.
+   * 返回已被聚合器进行聚合的、包含所有键值对数据的迭代器
    */
   def iterator: Iterator[Product2[K, C]] = {
     isShuffleSort = false
+    // 先获取每个分区数据的迭代器，再进行flatMap
     partitionedIterator.flatMap(pair => pair._2)
   }
 
@@ -961,8 +963,12 @@ private[spark] class ExternalSorter[K, V, C](
    * Write all the data added into this ExternalSorter into a file in the disk store. This is
    * called by the SortShuffleWriter.
    *
+   * 将当前ExternalSorter中的添加数据全部写出到磁盘的文件，这个方法主要被SortShuffleWriter调用。
+   *
    * @param blockId block ID to write to. The index file will be blockId.name + ".index".
+   *                写出到存储体系中的BlockId
    * @return array of lengths, in bytes, of each partition of the file (used by map output tracker)
+   *         返回每个分区数据的长度所组成的数组，该返回值主要交给MapOutputTracker使用
    */
   def writePartitionedFile(
       blockId: BlockId,
@@ -990,7 +996,7 @@ private[spark] class ExternalSorter[K, V, C](
       }
     } else { // 如果spills中缓存了溢出到磁盘的文件，即有些数据在内存中，有些数据已经溢出到了磁盘上
       // We must perform merge-sort; get an iterator by partition and write everything directly.
-      // 将各个元素写到磁盘
+      // 使用partitionedIterator()方法对磁盘和内存中的数据进行合并后，将各个元素写到磁盘
       for ((id, elements) <- this.partitionedIterator) {
         if (elements.hasNext) {
           for (elem <- elements) {
@@ -1015,10 +1021,13 @@ private[spark] class ExternalSorter[K, V, C](
   }
 
   def stop(): Unit = {
+    // 删除所有的溢写文件
     spills.foreach(s => s.file.delete())
     spills.clear()
+    // 删除所有的强制溢写文件
     forceSpillFiles.foreach(s => s.file.delete())
     forceSpillFiles.clear()
+    // 清理集合，释放内存
     if (map != null || buffer != null) {
       map = null // So that the memory can be garbage-collected
       buffer = null // So that the memory can be garbage-collected
@@ -1029,8 +1038,8 @@ private[spark] class ExternalSorter[K, V, C](
   /**
    * Given a stream of ((partition, key), combiner) pairs *assumed to be sorted by partition ID*,
    * group together the pairs for each partition into a sub-iterator.
-    *
-    * 用于对destructiveIterator方法返回的迭代器按照分区ID进行分区
+   *
+   * 用于对destructiveIterator方法返回的迭代器按照分区ID进行分区
    *
    * @param data an iterator of elements, assumed to already be sorted by partition ID
    */
@@ -1046,74 +1055,115 @@ private[spark] class ExternalSorter[K, V, C](
    * An iterator that reads only the elements for a given partition ID from an underlying buffered
    * stream, assuming this partition is the next one to be read. Used to make it easier to return
    * partitioned iterators from our in-memory collection.
+   *
+   * 分区数据迭代器
+   *
+   * @param partitionId 指定的迭代分区
+   * @param data 该分区的缓冲迭代器
    */
   private[this] class IteratorForPartition(partitionId: Int, data: BufferedIterator[((Int, K), C)])
     extends Iterator[Product2[K, C]]
   {
     /**
       * 用于判断对于指定分区ID是否有下一个元素：
-      * - data本身需要有下一个元素。
-      * - data的下一个元素对应的分区ID要与指定的分区ID一样。
-      *
-      * @return
+      * 1. data本身需要有下一个元素。
+      * 2. data的下一个元素对应的分区ID要与指定的分区ID一样。
       */
     override def hasNext: Boolean = data.hasNext && data.head._1._1 == partitionId
 
+    // 获取下一个元素
     override def next(): Product2[K, C] = {
       if (!hasNext) {
         throw new NoSuchElementException
       }
+      // 直接从data中获取
       val elem = data.next()
+      // 返回键值对
       (elem._1._2, elem._2)
     }
   }
 
+  /**
+   * 可溢写的迭代器，它会将内存的数据包装为迭代器，在TaskMemoryManager内存不足要求强制溢写时，
+   * 会调用该迭代器的spill()方法进行溢写
+   *
+   * @param upstream 内存数据迭代器
+   */
   private[this] class SpillableIterator(var upstream: Iterator[((Int, K), C)])
     extends Iterator[((Int, K), C)] {
 
+    // 溢写锁
     private val SPILL_LOCK = new Object()
 
     private var nextUpstream: Iterator[((Int, K), C)] = null
 
+    // 在初始化时直接读取下一个元素
     private var cur: ((Int, K), C) = readNext()
 
+    // 标记是否溢出了
     private var hasSpilled: Boolean = false
 
     def spill(): Boolean = SPILL_LOCK.synchronized {
-      if (hasSpilled) {
+      if (hasSpilled) { // 如果已经进行过溢写
+        // 直接返回false
         false
       } else {
+        // 创建基于WritablePartitionedIterator的迭代器
         val inMemoryIterator = new WritablePartitionedIterator {
           private[this] var cur = if (upstream.hasNext) upstream.next() else null
 
+          // 使用DiskBlockObjectWriter迭代写出
           def writeNext(writer: DiskBlockObjectWriter): Unit = {
+            // 写出键值对
             writer.write(cur._1._2, cur._2)
+            // 更新cur
             cur = if (upstream.hasNext) upstream.next() else null
           }
 
           def hasNext(): Boolean = cur != null
 
+          // 下一个分区
           def nextPartition(): Int = cur._1._1
         }
         logInfo(s"Task ${context.taskAttemptId} force spilling in-memory map to disk and " +
           s" it will release ${org.apache.spark.util.Utils.bytesToString(getUsed())} memory")
+
+        // 将WritablePartitionedIterator迭代器中的数据溢写到磁盘
         val spillFile = spillMemoryIteratorToDisk(inMemoryIterator)
+
+        // 将强制溢写的文件放入到forceSpillFiles进行记录
         forceSpillFiles += spillFile
+
+        // 创建溢写文件读取器
         val spillReader = new SpillReader(spillFile)
+
+        // 以每个分区的数据创建新的迭代器
         nextUpstream = (0 until numPartitions).iterator.flatMap { p =>
+          // 获取下一个分区数据的迭代器
           val iterator = spillReader.readNextPartition()
+          // 转换为((Int, K), V)类型的键值对
           iterator.map(cur => ((p, cur._1), cur._2))
         }
+        // 标记hasSpilled为true，表示已经执行过溢写操作
         hasSpilled = true
         true
       }
     }
 
+    // 读取下一个元素
     def readNext(): ((Int, K), C) = SPILL_LOCK.synchronized {
+      /**
+       * 如果nextUpstream不为null，说明出现过溢写操作，
+       * 此时内存中的数据（即upstream迭代器中的数据）都溢写到磁盘了，
+       * nextUpstream是根据磁盘文件中的数据构建的新的迭代器，
+       * 因此将其赋值给upstream，作为新的迭代器。
+       */
       if (nextUpstream != null) {
         upstream = nextUpstream
         nextUpstream = null
       }
+
+      // 如果upstream迭代器有下一个元素，就返回它的下一个元素
       if (upstream.hasNext) {
         upstream.next()
       } else {
@@ -1121,10 +1171,13 @@ private[spark] class ExternalSorter[K, V, C](
       }
     }
 
+    // 是否有下一个元素，以cur是否为null来判断
     override def hasNext(): Boolean = cur != null
 
+    // 获取下一个元素
     override def next(): ((Int, K), C) = {
       val r = cur
+      // 使用readNext()方法来获取
       cur = readNext()
       r
     }

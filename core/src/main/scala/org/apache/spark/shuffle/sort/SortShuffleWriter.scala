@@ -65,8 +65,8 @@ private[spark] class SortShuffleWriter[K, V, C](
   private val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 
   /** Write a bunch of records to this task's output
-    * 将map任务的输出结果写到磁盘
-    **/
+   * 将map任务的输出结果写到磁盘
+   */
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     // 创建ExternalSorter，
     // dep.mapSideCombine决定了ExternalSorter选择PartitionedAppendOnlyMap还是PartitionedPairBuffer。

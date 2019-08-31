@@ -30,6 +30,8 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
   /**
    * Spills the current in-memory collection to disk, and releases the memory.
    *
+   * 将当前内存中的集合数据溢写到磁盘，以释放内存。
+   *
    * @param collection collection to spill to disk
    */
   protected def spill(collection: C): Unit
@@ -37,6 +39,8 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
   /**
    * Force to spilling the current in-memory collection to disk to release memory,
    * It will be called by TaskMemoryManager when there is not enough memory for the task.
+   *
+   * 强制溢写操作
    */
   protected def forceSpill(): Boolean
 
@@ -59,10 +63,10 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
   // Force this collection to spill when there are this many elements in memory
   // For testing only
   /**
-    * 当集合中有太多元素时，强制将集合中的数据溢出到磁盘的阈值。
-    * 可通过spark.shuffle.spill.numElementsForceSpillThreshold属性配置，
-    * 默认为Long.MAX_VALUE。
-    */
+   * 当集合中有太多元素时，强制将集合中的数据溢出到磁盘的阈值。
+   * 可通过spark.shuffle.spill.numElementsForceSpillThreshold属性配置，默认为Long.MAX_VALUE。
+   * 该值是用来测试的。
+   */
   private[this] val numElementsForceSpillThreshold: Long =
     SparkEnv.get.conf.getLong("spark.shuffle.spill.numElementsForceSpillThreshold", Long.MaxValue)
 
@@ -87,9 +91,11 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
    * Spills the current in-memory collection to disk if needed. Attempts to acquire more
    * memory before spilling.
    *
-    * 用于将PartitionedAppendOnlyMap或PartitionedPairBuffer底层的数据溢出到磁盘
-    *
-   * @param collection collection to spill to disk
+   * 用于检测存放数据的集合是否需要进行溢写，若需要溢写，
+   * 会调用spill()方法将集合中的数据溢出到磁盘。
+   * 返回值表示是否需要溢写。
+   *
+   * @param collection    collection to spill to disk
    * @param currentMemory estimated size of the collection in bytes
    * @return true if `collection` was spilled to disk; false otherwise
    */
@@ -113,9 +119,10 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
     shouldSpill = shouldSpill || _elementsRead > numElementsForceSpillThreshold
     // Actually spill
     if (shouldSpill) { // 如果应该进行溢出
+      // 溢写操作计数自增
       _spillCount += 1
       logSpillage(currentMemory)
-      // 将集合中的数据溢出到磁盘
+      // 将集合中的数据溢出到磁盘，该方法是抽象方法，需要子类实现
       spill(collection)
       // 已读取的元素计数归零
       _elementsRead = 0
@@ -131,16 +138,30 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
   /**
    * Spill some data to disk to release memory, which will be called by TaskMemoryManager
    * when there is not enough memory for the task.
+   *
+   * 该溢写操作是由TaskMemoryManager发现内存不足时主动调用的
+   *
+   * @param size 需要溢写的内存大小，在该方法中并未使用
+   * @param trigger 触发内存溢写的MemoryConsumer，表示是因为该MemoryConsumer申请内存时导致的强制溢写
    */
   override def spill(size: Long, trigger: MemoryConsumer): Long = {
+    /**
+     * 由于是因为trigger申请内存时导致的强制溢写，因此溢写的内存消费者不能是trigger
+     * 触发溢写的MemoryConsumer不是自己，且Tungsten内存是ON_HEAP模式的
+     */
     if (trigger != this && taskMemoryManager.getTungstenMemoryMode == MemoryMode.ON_HEAP) {
+      // 强制溢写
       val isSpilled = forceSpill()
       if (!isSpilled) {
-        0L
-      } else {
+        0L // 未溢写
+      } else { // 发生了溢写
+        // 计算溢写的内存
         val freeMemory = myMemoryThreshold - initialMemoryThreshold
+        // 增加溢写数据的计数
         _memoryBytesSpilled += freeMemory
+        // 释放内存
         releaseMemory()
+        // 返回溢写的数据大小
         freeMemory
       }
     } else {
@@ -157,6 +178,7 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
    * Release our memory back to the execution pool so that other tasks can grab it.
    */
   def releaseMemory(): Unit = {
+    // 是否内存
     freeMemory(myMemoryThreshold - initialMemoryThreshold)
     myMemoryThreshold = initialMemoryThreshold
   }
