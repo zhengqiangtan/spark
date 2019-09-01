@@ -124,7 +124,9 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       TaskContext taskContext,
       SparkConf conf) {
     // Use getSizeAsKb (not bytes) to maintain backwards compatibility if no units are provided
+    // 文件缓冲区大小，默认为32MB
     this.fileBufferSize = (int) conf.getSizeAsKb("spark.shuffle.file.buffer", "32k") * 1024;
+    // 是否开启NIO的TransferTo，默认为true
     this.transferToEnabled = conf.getBoolean("spark.file.transferTo", true);
     this.blockManager = blockManager;
     final ShuffleDependency<K, V, V> dep = handle.dependency();
@@ -183,6 +185,7 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       // 将临时Shuffle文件的输出流中的数据写入到磁盘
       // 将返回的FileSegment放入partitionWriterSegments数组中，以此分区ID为索引的位置。
       partitionWriterSegments[i] = writer.commitAndGet();
+      // 关闭DiskBlockObjectWriter
       writer.close();
     }
 
@@ -264,18 +267,24 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       return None$.empty();
     } else {
       stopping = true;
-      if (success) {
+      if (success) { // 写出文件数据成功
+        // 若mapStatus为null，则抛出异常
         if (mapStatus == null) {
           throw new IllegalStateException("Cannot call stop(true) without having called write()");
         }
+        // 否则返回mapStatus
         return Option.apply(mapStatus);
-      } else {
+      } else { // 写出文件数据未成功
         // The map task failed, so delete our output data.
+        // 检查是否存在分区的DiskBlockObjectWriter镀锡
         if (partitionWriters != null) {
           try {
+            // 遍历分区的DiskBlockObjectWriter对象
             for (DiskBlockObjectWriter writer : partitionWriters) {
               // This method explicitly does _not_ throw exceptions:
+              // 放弃只写入一半的操作
               File file = writer.revertPartialWritesAndClose();
+              // 删除生成的文件
               if (!file.delete()) {
                 logger.error("Error while deleting file {}", file.getAbsolutePath());
               }

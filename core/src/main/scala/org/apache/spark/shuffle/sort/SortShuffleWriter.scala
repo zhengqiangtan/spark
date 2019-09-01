@@ -109,20 +109,25 @@ private[spark] class SortShuffleWriter[K, V, C](
     }
   }
 
-  /** Close this writer, passing along whether the map completed */
+  /** Close this writer, passing along whether the map completed
+   * 关闭当前的SortShuffleWriter
+   */
   override def stop(success: Boolean): Option[MapStatus] = {
     try {
-      if (stopping) {
+      if (stopping) { // 已经关闭
+        // 返回None
         return None
       }
       stopping = true
-      if (success) {
+      if (success) { // 成功写出Map任务输出文件
+        // 返回MapStatus
         return Option(mapStatus)
       } else {
         return None
       }
     } finally {
       // Clean up our sorter, which may have its own intermediate files
+      // 关闭ExternalSorter，清理资源
       if (sorter != null) {
         val startTime = System.nanoTime()
         sorter.stop()
