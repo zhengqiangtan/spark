@@ -37,18 +37,24 @@ case class Aggregator[K, V, C] (
   def combineValuesByKey(
       iter: Iterator[_ <: Product2[K, V]],
       context: TaskContext): Iterator[(K, C)] = {
+    // 创建ExternalAppendOnlyMap，附带有createCombiner
     val combiners = new ExternalAppendOnlyMap[K, V, C](createCombiner, mergeValue, mergeCombiners)
+    // 插入数据
     combiners.insertAll(iter)
     updateMetrics(context, combiners)
+    // 返回聚合后的迭代器
     combiners.iterator
   }
 
   def combineCombinersByKey(
       iter: Iterator[_ <: Product2[K, C]],
       context: TaskContext): Iterator[(K, C)] = {
+    // 创建ExternalAppendOnlyMap，createCombiner传的是identity
     val combiners = new ExternalAppendOnlyMap[K, C, C](identity, mergeCombiners, mergeCombiners)
+    // 插入数据
     combiners.insertAll(iter)
     updateMetrics(context, combiners)
+    // 返回聚合后的迭代器
     combiners.iterator
   }
 
