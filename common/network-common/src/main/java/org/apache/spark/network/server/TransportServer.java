@@ -137,15 +137,24 @@ public class TransportServer implements Closeable {
 
     // 为根引导程序设置管道初始化回调函数
     bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
-      // 当服务端的Channel初始化时该方法会被调用
+      /**
+       * 当服务端的Channel初始化时该方法会被调用。
+       * 一旦有客户端的连接被接收，该方法就会被调用，
+       * 其中ch即是与客户端进行通信的SocketChannel。
+       */
       @Override
       protected void initChannel(SocketChannel ch) throws Exception {
+        logger.trace("Transport ChannelInitializer initChannel: {}", ch);
+
         RpcHandler rpcHandler = appRpcHandler;
         // 遍历所有的TransportServerBootstrap，调用其doBootstraps()方法
         for (TransportServerBootstrap bootstrap : bootstraps) {
           rpcHandler = bootstrap.doBootstrap(ch, rpcHandler);
         }
-        // 使用TransportContext的initializePipeline()方法为服务端的ChannelPipeline添加处理器
+        /**
+         * 使用TransportContext的initializePipeline()方法为服务端的ChannelPipeline添加处理器
+         * 该操作会为ch的ChannelPipeline上添加多个处理器
+         */
         context.initializePipeline(ch, rpcHandler);
       }
     });

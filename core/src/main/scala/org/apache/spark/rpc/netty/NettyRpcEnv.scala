@@ -773,6 +773,8 @@ private[netty] class NettyRpcHandler(
 
   // Channel激活时调用
   override def channelActive(client: TransportClient): Unit = {
+    println(">>>>> NettyRpcHandler.channelActive Channel: " + client.getChannel().getClass)
+    println(">>>>> NettyRpcHandler.channelActive remoteAddress: " + client.getChannel().remoteAddress())
     val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
     assert(addr != null)
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)

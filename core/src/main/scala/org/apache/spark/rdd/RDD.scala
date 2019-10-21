@@ -526,25 +526,36 @@ abstract class RDD[T: ClassTag](
               (implicit ord: Ordering[T] = null)
       : RDD[T] = withScope {
     require(numPartitions > 0, s"Number of partitions ($numPartitions) must be positive.")
-    if (shuffle) {
-      /** Distributes elements evenly across output partitions, starting from a random partition. */
+    if (shuffle) { // 需要Shuffle
+      /**
+       * Distributes elements evenly across output partitions, starting from a random partition.
+       *
+       * index：分区号
+       * items：分区号为index的分区内的元素
+       */
       val distributePartition = (index: Int, items: Iterator[T]) => {
+        // 使用分区号作为随机种子，取0 ~ numPartitions之内的整数为新的分区号
         var position = (new Random(index)).nextInt(numPartitions)
         items.map { t =>
           // Note that the hash code of the key will just be the key itself. The HashPartitioner
           // will mod it with the number of total partitions.
+          // 将之前分区号为index的分区内的元素的分区都修改为新的分区号，这里是分区号是递增的
           position = position + 1
           (position, t)
         }
       } : Iterator[(Int, T)]
 
       // include a shuffle step so that our upstream tasks are still distributed
+      // 需要Shuffle时还会嵌套一个ShuffledRDD
       new CoalescedRDD(
-        new ShuffledRDD[Int, T, T](mapPartitionsWithIndex(distributePartition),
-        new HashPartitioner(numPartitions)),
-        numPartitions,
-        partitionCoalescer).values
-    } else {
+        new ShuffledRDD[Int, T, T](
+          // 此处会对原有数据加上随机的key
+          mapPartitionsWithIndex(distributePartition),
+          // 此处的分区器才负责真正的分区过程，分为numPartitions个分区
+          new HashPartitioner(numPartitions)),
+          numPartitions,
+          partitionCoalescer).values
+    } else { // 不需要Shuffle，直接构成了CoalescedRDD
       new CoalescedRDD(this, numPartitions, partitionCoalescer)
     }
   }

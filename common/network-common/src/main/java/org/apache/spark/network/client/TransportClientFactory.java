@@ -98,8 +98,8 @@ public class TransportClientFactory implements Closeable {
    * */
   private final Random rand;
   /**
-   * 用于指定对等节点间的连接数
-   * 从TransportConf获取的key为“spark.+模块名+.io.num-ConnectionsPerPeer”的属性值
+   * 每个远程地址的ClientPool池内最多可以存放的TransportClient的数量
+   * 由TransportConf的spark.模块名.io.numConnectionsPerPeer参数配置，默认为1
    * 模块名实际为TransportConf的module字段
    */
   private final int numConnectionsPerPeer;
@@ -119,6 +119,10 @@ public class TransportClientFactory implements Closeable {
     this.conf = context.getConf();
     this.clientBootstraps = Lists.newArrayList(Preconditions.checkNotNull(clientBootstraps));
     this.connectionPool = new ConcurrentHashMap<>();
+    /**
+     * 每个远程地址的ClientPool池内最多可以存放的TransportClient的数量
+     * 由spark.模块名.io.numConnectionsPerPeer参数配置，默认为1
+     */
     this.numConnectionsPerPeer = conf.numConnectionsPerPeer();
     this.rand = new Random();
 

@@ -305,8 +305,13 @@ private[spark] class ExternalSorter[K, V, C](
    * @param collection whichever collection we're using (map or buffer)
    */
   override protected[this] def spill(collection: WritablePartitionedPairCollection[K, C]): Unit = {
-    // 获取WritablePartitionedIterator，传入的是比较器由comparator方法提供，
-    // 如果定义了ordering或aggregator，那么比较器就是keyComparator，否则没有比较器。
+    /**
+     * 获取WritablePartitionedIterator，传入的是比较器由comparator方法提供。
+     * 如果定义了ordering或aggregator，那么比较器就是keyComparator，否则没有比较器。
+     * 这里会影响后面的排序过程：
+     * - 如果指定了ordering或aggregator，此处传入keyComparator，后面的[[PartitionedAppendOnlyMap]]不仅会根据分区ID进行排序，还会根据keyComparator对键进行排序；
+     * - 如果没有指定ordering或aggregator，此处传入None，后面的[[PartitionedPairBuffer]]则只会根据分区ID进行排序。
+     */
     val inMemoryIterator = collection.destructiveSortedWritablePartitionedIterator(comparator)
     // 将集合中的数据溢出到磁盘
     val spillFile = spillMemoryIteratorToDisk(inMemoryIterator)

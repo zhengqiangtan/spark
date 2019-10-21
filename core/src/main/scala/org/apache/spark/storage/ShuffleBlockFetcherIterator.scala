@@ -179,7 +179,7 @@ final class ShuffleBlockFetcherIterator(
     // 释放正在处理的FetchResult的buf
     releaseCurrentResultBuffer()
     // Release buffers in the results queue
-    // 迭代还会处理的FetchResult
+    // 迭代还未处理的FetchResult
     val iter = results.iterator()
     while (iter.hasNext) {
       val result = iter.next()

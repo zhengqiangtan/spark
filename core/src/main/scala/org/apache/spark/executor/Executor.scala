@@ -102,6 +102,7 @@ private[spark] class Executor(
   // 非Local运行模式才会初始化
   if (!isLocal) {
     env.metricsSystem.registerSource(executorSource)
+    // 初始化BlockManager，这里与Driver有区别，Driver是在SparkContext初始化时直接初始化的
     env.blockManager.initialize(conf.getAppId)
   }
 

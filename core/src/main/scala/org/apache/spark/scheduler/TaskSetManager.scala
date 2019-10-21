@@ -254,10 +254,10 @@ private[spark] class TaskSetManager(
     for (loc <- tasks(index).preferredLocations) { // 遍历的是TaskLocation对象
       // 进行匹配，根据不同的偏好位置，更新到不同的字典中进行记录
       loc match {
-        case e: ExecutorCacheTaskLocation =>
+        case e: ExecutorCacheTaskLocation => // Task所需要计算的数据在Executor上
           // 更新到pendingTasksForExecutor字典
           pendingTasksForExecutor.getOrElseUpdate(e.executorId, new ArrayBuffer) += index
-        case e: HDFSCacheTaskLocation =>
+        case e: HDFSCacheTaskLocation => // Task所需要计算的数据存储在HDFS上
           // 获取对应节点上还存活的Executor集合
           val exe = sched.getExecutorsAliveOnHost(loc.host)
           exe match {
@@ -276,7 +276,7 @@ private[spark] class TaskSetManager(
       }
       // 更新pendingTasksForHost
       pendingTasksForHost.getOrElseUpdate(loc.host, new ArrayBuffer) += index
-      // 更新pendingTasksForRack
+      // 获取Task本地性级别中节点所在的机架，更新pendingTasksForRack
       for (rack <- sched.getRackForHost(loc.host)) {
         pendingTasksForRack.getOrElseUpdate(rack, new ArrayBuffer) += index
       }
@@ -523,6 +523,7 @@ private[spark] class TaskSetManager(
     }
 
     // find a speculative task if all others tasks have been scheduled
+    // 上面的基本本地性级别都没有可调度的Task，则尝试找一个推测执行Task进行调度。
     dequeueSpeculativeTask(execId, host, maxLocality).map { // 选择可推断的Task及其本地性
       case (taskIndex, allowedLocality) => (taskIndex, allowedLocality, true)}
   }
@@ -565,7 +566,8 @@ private[spark] class TaskSetManager(
       // 指定的允许的最大本地化级别
       var allowedLocality = maxLocality
 
-      if (maxLocality != TaskLocality.NO_PREF) { // 计算允许的本地性级别
+      if (maxLocality != TaskLocality.NO_PREF) {
+        // 计算允许的本地性级别，会传入当前时间
         allowedLocality = getAllowedLocalityLevel(curTime)
         if (allowedLocality > maxLocality) {
           // We're not allowed to search for farther-away tasks
@@ -651,11 +653,20 @@ private[spark] class TaskSetManager(
   /**
    * Get the level we can launch tasks according to delay scheduling, based on current wait time.
    *
-   * 用于获取允许的本地性级别
+   * 用于获取可以启动Task的本地性级别，需要根据基于等待时间的延迟调度来计算。
    */
   private def getAllowedLocalityLevel(curTime: Long): TaskLocality.TaskLocality = {
     // Remove the scheduled or finished tasks lazily
-    // 用于判断给定的待处理Task数组中是否有需要调度的Task
+    /**
+     * 用于判断给定的待处理Task数组中是否有需要被调度的Task，
+     * 在判断期间，还会将已经启动TaskAttempt或者已执行完成的Task从对应的集合中移除。
+     * 这里的集合是指pendingTasksForExecutor、pendingTasksForHost或pendingTasksForRack。
+     *
+     * 该方法其实很简单：
+     * 1. 如果以上三类集合中存在未完成且未启动TaskAttempt的Task，则表示还存在需要被调度的Task，直接返回true。
+     * 2. 如果存在已启动TaskAttempt的Task，或者是已完成的Task，则将它们从集合中移除。
+     * 3. 如果遍历完没有找到第1种情况所描述的Task，则表示没有需要被调度的Task，返回false。
+     */
     def tasksNeedToBeScheduledFrom(pendingTaskIds: ArrayBuffer[Int]): Boolean = {
       // 从后向前遍历待处理的Task的ID集合
       var indexOffset = pendingTaskIds.size
@@ -669,7 +680,7 @@ private[spark] class TaskSetManager(
           // 该Task需要被调度
           return true
         } else {
-          // 否则从pendingTaskIds移除当前位置的Task，进行下一次循环
+          // 否则说明该Task正在运行，或者已经运行完了，则可以移除该Task
           pendingTaskIds.remove(indexOffset)
         }
       }
@@ -689,25 +700,39 @@ private[spark] class TaskSetManager(
       // 判断待处理Task集合pendingTasks中是否有需要被调度的Task
       val hasTasks = pendingTasks.exists {
         case (id: String, tasks: ArrayBuffer[Int]) =>
-          // 使用tasksNeedToBeScheduledFrom()进行判断
+
+          /**
+           * 使用tasksNeedToBeScheduledFrom()判断指定集合是否还有需要被调度的Task。
+           * 注意该方法的返回值：
+           * 1. 返回true，表示还存在需要被调度的Task。
+           * 2. 返回false，表示不存在需要被调度的Task。
+           *
+           * 如果返回false，则表示对应的Executor、Host或Rack上没有待调度的Task了，
+           * 因此可以在else分支记录这些Executor、Host或Rack的ID，最终将它们移除。
+           */
           if (tasksNeedToBeScheduledFrom(tasks)) {
             // 如果有，直接返回true
             true
           } else {
-            // 否则记录该Task的ID，并返回false
+            // 否则记录该Executor的ID，并返回false
             emptyKeys += id
             false
           }
       }
       // The key could be executorId, host or rackId
-      // 从待处理Task集合中移除不需要被调度的Task的ID
+      /**
+       * 遍历记录的key，这里的key可以是executorId、host、rackId，
+       * 然后从pendingTasksForExecutor、pendingTasksForHost、pendingTasksForRack等集合中，
+       * 移除以executorId、host、rackId为键对应的键值对，因为它们已经没有待调度的Task了。
+       */
       emptyKeys.foreach(id => pendingTasks.remove(id))
       // 返回需要被调度的Task集合
       hasTasks
     }
 
+    // 从currentLocalityIndex所记录的索引开始，在myLocalityLevels数组中遍历本地性级别
     while (currentLocalityIndex < myLocalityLevels.length - 1) {
-      // 查找本地性级别是否有Task要运行
+      // 查找每个遍历到的本地性级别是否有Task需要被调度
       val moreTasks = myLocalityLevels(currentLocalityIndex) match { // 根据支持的本地性进行分别判断
         case TaskLocality.PROCESS_LOCAL => moreTasksToRunIn(pendingTasksForExecutor)
         case TaskLocality.NODE_LOCAL => moreTasksToRunIn(pendingTasksForHost)
@@ -715,35 +740,45 @@ private[spark] class TaskSetManager(
         case TaskLocality.RACK_LOCAL => moreTasksToRunIn(pendingTasksForRack)
       }
 
-      // 判断对应的本地性级别是否有需要处理的Task
-      if (!moreTasks) {
+      // 判断遍历到的本地性级别是否有需要被调度的Task
+      if (!moreTasks) { // 当前遍历到的本地性级别没有需要被调度的Task
         // This is a performance optimization: if there are no more tasks that can
         // be scheduled at a particular locality level, there is no point in waiting
         // for the locality wait timeout (SPARK-4939).
-        // 没有Task需要处理，则将最后的运行时间设置为curTime
+        // 将最后的Task启动时间更新为curTime
         lastLaunchTime = curTime
         logDebug(s"No tasks for locality level ${myLocalityLevels(currentLocalityIndex)}, " +
           s"so moving to locality level ${myLocalityLevels(currentLocalityIndex + 1)}")
+        // 因为该本地性级别没有Task需要被调度，因此直接跳入下一个本地性级别
         currentLocalityIndex += 1
       } else if (curTime - lastLaunchTime >= localityWaits(currentLocalityIndex)) {
         /**
-         * 否则需要判断已等待时间是否大于等于该本地性级别要求的等待时间
-         * 等待时间由curTime - lastLaunchTime来计算
+         * curTime - lastLaunchTime表示距离上一次Task被调度的时间，
+         * 首先，走到这里说明当前遍历到的本地性级别存在需要被调度的Task，
+         * 同时，距离上一次Task被调度的时间超过了该本地性级别所要求的等待时间，
+         * 由于等待时间太长，放弃调度该本地性级别上的待调度Task。
+         *
+         * 更新lastLaunchTime，加上当前遍历到的本地化级别的等待时间。
+         * 然后跳入更低的本地性级别。
          */
         // Jump to the next locality level, and reset lastLaunchTime so that the next locality
         // wait timer doesn't immediately expire
-        // 更新lastLaunchTime
+        //
         lastLaunchTime += localityWaits(currentLocalityIndex)
         logDebug(s"Moving to ${myLocalityLevels(currentLocalityIndex + 1)} after waiting for " +
           s"${localityWaits(currentLocalityIndex)}ms")
         // 跳入更低的本地性级别
         currentLocalityIndex += 1
       } else {
-        // 返回当前本地性级别
+        /**
+         * 走到这里，说明当前遍历到的本地性级别中存在需要被调度的Task，
+         * 且距离上一次Task被调度的时间还未超过该本地性级别要求的等待时间，
+         * 因此可以调度该本地性级别中待调度的Task，返回当前本地性级别即可。
+         */
         return myLocalityLevels(currentLocalityIndex)
       }
     }
-    // 未能找到允许的本地性级别，那么返回最低的本地性级别
+    // 未能找到允许的本地性级别，那么返回最终遍历到的极低本地性级别
     myLocalityLevels(currentLocalityIndex)
   }
 

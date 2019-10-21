@@ -1242,7 +1242,7 @@ class DAGScheduler(
       stage match {
         case stage: ShuffleMapStage => // 为ShuffleMapStage的每一个分区创建一个ShuffleMapTask
           partitionsToCompute.map { id =>
-            // 分区偏好位置序列
+            // 对应分区的偏好位置序列
             val locs = taskIdToLocations(id)
             // RDD的分区
             val part = stage.rdd.partitions(id)

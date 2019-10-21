@@ -339,7 +339,7 @@ private[spark] class TaskSchedulerImpl(
       availableCpus: Array[Int],
       tasks: IndexedSeq[ArrayBuffer[TaskDescription]]) : Boolean = {
     var launchedTask = false
-    // 将遍历WorkerOffer序列
+    // 将遍历WorkerOffer序列，每个WorkerOffer表示一个可供调度的Executor
     for (i <- 0 until shuffledOffers.size) {
       // 获取WorkerOffer的Executor的身份标识
       val execId = shuffledOffers(i).executorId
@@ -432,6 +432,8 @@ private[spark] class TaskSchedulerImpl(
     val availableCpus = shuffledOffers.map(o => o.cores).toArray
     // 对rootPool中所有TaskSetManager按照调度算法排序
     val sortedTaskSets = rootPool.getSortedTaskSetQueue
+
+    // 遍历所有的TaskSetManager，如果有新的Executor添加就告诉它们，它们会重新计算支持的本地性级别。
     for (taskSet <- sortedTaskSets) {
       logDebug("parentName: %s, name: %s, runningTasks: %s".format(
         taskSet.parent.name, taskSet.name, taskSet.runningTasks))
@@ -445,17 +447,18 @@ private[spark] class TaskSchedulerImpl(
     // of locality levels so that it gets a chance to launch local tasks on all of them.
     // NOTE: the preferredLocality order: PROCESS_LOCAL, NODE_LOCAL, NO_PREF, RACK_LOCAL, ANY
     /**
-      * 遍历TaskSetManager，按照最大本地性的原则（即从高本地性级别到低本地性级别）
-      * 调用resourceOfferSingleTaskSet()方法，给单个TaskSet中的Task提供资源
-      */
-    for (taskSet <- sortedTaskSets) {
+     * 遍历TaskSetManager，
+     * 在单个TaskSetManager中，按照最大本地性的原则（即从高本地性级别到低本地性级别）
+     * 调用resourceOfferSingleTaskSet()方法，给单个TaskSet中的Task提供资源
+     */
+    for (taskSet <- sortedTaskSets) { // 循环根据调度算法排好序的待执行Task
       var launchedAnyTask = false
       var launchedTaskAtCurrentMaxLocality = false
-      // 按照最大本地性的原则，给Task提供资源
+      // 对单个TaskSetManager，遍历它所支持的的本地化级别，按照最大本地性的原则，给Task提供资源
       for (currentMaxLocality <- taskSet.myLocalityLevels) {
         do {
           /**
-           * 调用resourceOfferSingleTaskSet()方法为单个TaskSet分配资源，
+           * 调用resourceOfferSingleTaskSet()方法为单个TaskSetManager分配资源，
            * 最终分配到资源的Task对应的TaskDescription会被放入到tasks数组中，
            * 返回值表示是否有Task被分配了资源
            */
