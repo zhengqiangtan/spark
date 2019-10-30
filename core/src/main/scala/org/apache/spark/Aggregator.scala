@@ -34,6 +34,7 @@ case class Aggregator[K, V, C] (
     mergeValue: (C, V) => C,
     mergeCombiners: (C, C) => C) {
 
+  // 调用此方法表示数据没有在Map端聚合，此时需要createCombiner处理初值
   def combineValuesByKey(
       iter: Iterator[_ <: Product2[K, V]],
       context: TaskContext): Iterator[(K, C)] = {
@@ -46,6 +47,7 @@ case class Aggregator[K, V, C] (
     combiners.iterator
   }
 
+  // 调用此方法表示处理的是已经通过Map端聚合的数据，不需要使用createCombiner再次进行初始化处理
   def combineCombinersByKey(
       iter: Iterator[_ <: Product2[K, C]],
       context: TaskContext): Iterator[(K, C)] = {

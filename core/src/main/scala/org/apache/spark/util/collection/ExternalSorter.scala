@@ -459,7 +459,7 @@ private[spark] class ExternalSorter[K, V, C](
     val readers = spills.map(new SpillReader(_))
     // 创建缓冲迭代器，该迭代器扩展了一个功能方法head()，即可以查看迭代器中的下一个元素，但不会将它移出
     val inMemBuffered = inMemory.buffered
-    // 遍历所有分区的ID
+    // 遍历所有分区的ID，顺序遍历
     (0 until numPartitions).iterator.map { p =>
       // 为当前分区创建一个迭代器
       val inMemIterator = new IteratorForPartition(p, inMemBuffered)
@@ -468,16 +468,24 @@ private[spark] class ExternalSorter[K, V, C](
       // 判断是否需要聚合
       if (aggregator.isDefined) { // 需要聚合
         // Perform partial aggregation across partitions
-        // 使用mergeWithAggregation()方法进行聚合，返回元素类型为 (分区ID, 对应的聚合数据的迭代器) 的迭代器
+        /**
+         * 使用mergeWithAggregation()方法进行聚合，返回元素类型为 (分区ID, 对应的聚合数据的迭代器) 的迭代器
+         * 虽然传入了ordering参数，但是目前Spark在Map端不存在需要排序的算子；
+         * 典型的在Map端聚合的算子：reduceByKey、aggregateByKey。
+         */
         (p, mergeWithAggregation(
           iterators, aggregator.get.mergeCombiners, keyComparator, ordering.isDefined))
       } else if (ordering.isDefined) { // 需要排序
         // No aggregator given, but we have an ordering (e.g. used by reduce tasks in sortByKey);
         // sort the elements without trying to merge them
-        // 使用mergeSort()方法进行归并排序，返回元素类型为 (分区ID, 对应的有序数据的迭代器) 的迭代器
+        /**
+         * 使用mergeSort()方法进行归并排序，返回元素类型为 (分区ID, 对应的有序数据的迭代器) 的迭代器
+         * 不过目前Spark在Map端不存在需要排序的算子；
+         * sortByKey、repartitionAndSortWithinPartitions()两个算子都是在Shuffle Read阶段排序的。
+         */
         (p, mergeSort(iterators, ordering.get))
       } else {
-        // 不需要聚合，也不需要排序
+        // 不需要聚合，也不需要排序，直接合并溢写文件中对应分区的数据
         (p, iterators.iterator.flatten)
       }
     }
