@@ -22,7 +22,8 @@ import java.util.Random
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.commons.math3.distribution.PoissonDistribution
-import org.scalatest.Matchers
+import org.scalatest.matchers.must.Matchers
+import org.scalatest.matchers.should.Matchers._
 
 import org.apache.spark.SparkFunSuite
 
@@ -333,7 +334,7 @@ class RandomSamplerSuite extends SparkFunSuite with Matchers {
 
     // ArrayBuffer iterator (indexable type)
     d = medianKSD(
-      gaps(sampler.sample(Iterator.from(0).take(20*sampleSize).to[ArrayBuffer].iterator)),
+      gaps(sampler.sample(ArrayBuffer(Iterator.from(0).take(20*sampleSize).toSeq: _*).iterator)),
       gaps(sample(Iterator.from(0), 0.1)))
     d should be < D
 
@@ -557,7 +558,7 @@ class RandomSamplerSuite extends SparkFunSuite with Matchers {
 
     // ArrayBuffer iterator (indexable type)
     d = medianKSD(
-      gaps(sampler.sample(Iterator.from(0).take(20*sampleSize).to[ArrayBuffer].iterator)),
+      gaps(sampler.sample(ArrayBuffer(Iterator.from(0).take(20*sampleSize).toSeq: _*).iterator)),
       gaps(sampleWR(Iterator.from(0), 0.1)))
     d should be < D
 

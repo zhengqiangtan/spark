@@ -21,7 +21,8 @@ import java.net.URLClassLoader
 
 import scala.collection.JavaConverters._
 
-import org.scalatest.Matchers
+import org.scalatest.matchers.must.Matchers
+import org.scalatest.matchers.should.Matchers._
 
 import org.apache.spark.{SparkContext, SparkException, SparkFunSuite, TestUtils}
 
@@ -134,7 +135,8 @@ class MutableURLClassLoaderSuite extends SparkFunSuite with Matchers {
 
     try {
       sc.makeRDD(1 to 5, 2).mapPartitions { x =>
-        Utils.classForName(className, noSparkClassLoader = true).getConstructor().newInstance()
+        Utils.classForName[AnyRef](className, noSparkClassLoader = true).
+          getConstructor().newInstance()
         Seq().iterator
       }.count()
     }

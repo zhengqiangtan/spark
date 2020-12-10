@@ -27,11 +27,11 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, ScalaReflection}
 import org.apache.spark.sql.catalyst.encoders.ExamplePointUDT
+import org.apache.spark.sql.catalyst.util.DateTimeConstants._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.CalendarInterval
-
 
 class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
 
@@ -75,7 +75,7 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
       checkEvaluation(Literal.default(DateType), LocalDate.ofEpochDay(0))
       checkEvaluation(Literal.default(TimestampType), Instant.ofEpochSecond(0))
     }
-    checkEvaluation(Literal.default(CalendarIntervalType), new CalendarInterval(0, 0L))
+    checkEvaluation(Literal.default(CalendarIntervalType), new CalendarInterval(0, 0, 0L))
     checkEvaluation(Literal.default(ArrayType(StringType)), Array())
     checkEvaluation(Literal.default(MapType(IntegerType, StringType)), Map())
     checkEvaluation(Literal.default(StructType(StructField("a", StringType) :: Nil)), Row(""))
@@ -187,7 +187,7 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
     checkArrayLiteral(Array(1, 2, 3))
     checkArrayLiteral(Array("a", "b", "c"))
     checkArrayLiteral(Array(1.0, 4.0))
-    checkArrayLiteral(Array(CalendarInterval.MICROS_PER_DAY, CalendarInterval.MICROS_PER_HOUR))
+    checkArrayLiteral(Array(MICROS_PER_DAY, MICROS_PER_HOUR))
     val arr = collection.mutable.WrappedArray.make(Array(1.0, 4.0))
     checkEvaluation(Literal(arr), toCatalyst(arr))
   }
@@ -199,7 +199,7 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
     checkSeqLiteral(Seq(1, 2, 3), IntegerType)
     checkSeqLiteral(Seq("a", "b", "c"), StringType)
     checkSeqLiteral(Seq(1.0, 4.0), DoubleType)
-    checkSeqLiteral(Seq(CalendarInterval.MICROS_PER_DAY, CalendarInterval.MICROS_PER_HOUR),
+    checkSeqLiteral(Seq(MICROS_PER_DAY, MICROS_PER_HOUR),
       CalendarIntervalType)
   }
 
@@ -209,6 +209,7 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
     }
     checkMapLiteral(Map("a" -> 1, "b" -> 2, "c" -> 3))
     checkMapLiteral(Map("1" -> 1.0, "2" -> 2.0, "3" -> 3.0))
+    assert(Literal.create(Map("a" -> 1)).toString === "map(keys: [a], values: [1])")
   }
 
   test("struct") {
@@ -236,6 +237,15 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
     checkEvaluation(Literal.create('0'), "0")
     checkEvaluation(Literal('\u0000'), "\u0000")
     checkEvaluation(Literal.create('\n'), "\n")
+  }
+
+  test("SPARK-33390: Make Literal support char array") {
+    checkEvaluation(Literal(Array('h', 'e', 'l', 'l', 'o')), "hello")
+    checkEvaluation(Literal(Array("hello".toCharArray)), Array("hello"))
+    // scalastyle:off
+    checkEvaluation(Literal(Array('测','试')), "测试")
+    checkEvaluation(Literal(Array('a', '测', 'b', '试', 'c')), "a测b试c")
+    // scalastyle:on
   }
 
   test("construct literals from java.time.LocalDate") {
@@ -302,7 +312,7 @@ class LiteralExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
       val timestamp = LocalDateTime.of(2019, 3, 21, 0, 2, 3, 456000000)
         .atZone(ZoneOffset.UTC)
         .toInstant
-      val expected = "TIMESTAMP('2019-03-21 01:02:03.456')"
+      val expected = "TIMESTAMP '2019-03-21 01:02:03.456'"
       val literalStr = Literal.create(timestamp).sql
       assert(literalStr === expected)
     }

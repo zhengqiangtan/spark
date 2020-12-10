@@ -26,7 +26,9 @@ import org.apache.spark.sql.catalyst.parser.ParserUtils
 import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, LogicalPlan, UnaryNode}
 import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.catalyst.util.quoteIdentifier
+import org.apache.spark.sql.connector.catalog.{Identifier, TableCatalog}
 import org.apache.spark.sql.types.{DataType, Metadata, StructType}
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 /**
  * Thrown when an invalid attempt is made to access a property of a tree that has yet to be fully
@@ -38,13 +40,55 @@ class UnresolvedException[TreeType <: TreeNode[_]](tree: TreeType, function: Str
 /**
  * Holds the name of a relation that has yet to be looked up in a catalog.
  *
- * @param tableIdentifier table name
+ * @param multipartIdentifier table name
+ * @param options options to scan this relation. Only applicable to v2 table scan.
  */
-case class UnresolvedRelation(tableIdentifier: TableIdentifier)
-  extends LeafNode {
+case class UnresolvedRelation(
+    multipartIdentifier: Seq[String],
+    options: CaseInsensitiveStringMap = CaseInsensitiveStringMap.empty(),
+    override val isStreaming: Boolean = false)
+  extends LeafNode with NamedRelation {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
 
   /** Returns a `.` separated name for this relation. */
-  def tableName: String = tableIdentifier.unquotedString
+  def tableName: String = multipartIdentifier.quoted
+
+  override def name: String = tableName
+
+  override def output: Seq[Attribute] = Nil
+
+  override lazy val resolved = false
+}
+
+object UnresolvedRelation {
+  def apply(
+      tableIdentifier: TableIdentifier,
+      extraOptions: CaseInsensitiveStringMap,
+      isStreaming: Boolean): UnresolvedRelation = {
+    UnresolvedRelation(
+      tableIdentifier.database.toSeq :+ tableIdentifier.table, extraOptions, isStreaming)
+  }
+
+  def apply(tableIdentifier: TableIdentifier): UnresolvedRelation =
+    UnresolvedRelation(tableIdentifier.database.toSeq :+ tableIdentifier.table)
+}
+
+/**
+ * A variant of [[UnresolvedRelation]] which can only be resolved to a v2 relation
+ * (`DataSourceV2Relation`), not v1 relation or temp view.
+ *
+ * @param originalNameParts the original table identifier name parts before catalog is resolved.
+ * @param catalog The catalog which the table should be looked up from.
+ * @param tableName The name of the table to look up.
+ */
+case class UnresolvedV2Relation(
+    originalNameParts: Seq[String],
+    catalog: TableCatalog,
+    tableName: Identifier)
+  extends LeafNode with NamedRelation {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
+
+  override def name: String = originalNameParts.quoted
 
   override def output: Seq[Attribute] = Nil
 
@@ -212,22 +256,27 @@ case class UnresolvedGenerator(name: FunctionIdentifier, children: Seq[Expressio
 
 case class UnresolvedFunction(
     name: FunctionIdentifier,
-    children: Seq[Expression],
-    isDistinct: Boolean)
+    arguments: Seq[Expression],
+    isDistinct: Boolean,
+    filter: Option[Expression] = None)
   extends Expression with Unevaluable {
 
+  override def children: Seq[Expression] = arguments ++ filter.toSeq
+
   override def dataType: DataType = throw new UnresolvedException(this, "dataType")
-  override def foldable: Boolean = throw new UnresolvedException(this, "foldable")
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
 
   override def prettyName: String = name.unquotedString
-  override def toString: String = s"'$name(${children.mkString(", ")})"
+  override def toString: String = {
+    val distinct = if (isDistinct) "distinct " else ""
+    s"'$name($distinct${children.mkString(", ")})"
+  }
 }
 
 object UnresolvedFunction {
-  def apply(name: String, children: Seq[Expression], isDistinct: Boolean): UnresolvedFunction = {
-    UnresolvedFunction(FunctionIdentifier(name, None), children, isDistinct)
+  def apply(name: String, arguments: Seq[Expression], isDistinct: Boolean): UnresolvedFunction = {
+    UnresolvedFunction(FunctionIdentifier(name, None), arguments, isDistinct)
   }
 }
 
@@ -264,35 +313,26 @@ abstract class Star extends LeafExpression with NamedExpression {
 case class UnresolvedStar(target: Option[Seq[String]]) extends Star with Unevaluable {
 
   /**
-   * Returns true if the nameParts match the qualifier of the attribute
+   * Returns true if the nameParts is a subset of the last elements of qualifier of the attribute.
    *
-   * There are two checks: i) Check if the nameParts match the qualifier fully.
-   * E.g. SELECT db.t1.* FROM db1.t1   In this case, the nameParts is Seq("db1", "t1") and
-   * qualifier of the attribute is Seq("db1","t1")
-   * ii) If (i) is not true, then check if nameParts is only a single element and it
-   * matches the table portion of the qualifier
-   *
-   * E.g. SELECT t1.* FROM db1.t1  In this case nameParts is Seq("t1") and
-   * qualifier is Seq("db1","t1")
-   * SELECT a.* FROM db1.t1 AS a
-   * In this case nameParts is Seq("a") and qualifier for
-   * attribute is Seq("a")
+   * For example, the following should all return true:
+   *   - `SELECT ns1.ns2.t.* FROM ns1.n2.t` where nameParts is Seq("ns1", "ns2", "t") and
+   *     qualifier is Seq("ns1", "ns2", "t").
+   *   - `SELECT ns2.t.* FROM ns1.n2.t` where nameParts is Seq("ns2", "t") and
+   *     qualifier is Seq("ns1", "ns2", "t").
+   *   - `SELECT t.* FROM ns1.n2.t` where nameParts is Seq("t") and
+   *     qualifier is Seq("ns1", "ns2", "t").
    */
   private def matchedQualifier(
       attribute: Attribute,
       nameParts: Seq[String],
       resolver: Resolver): Boolean = {
-    val qualifierList = attribute.qualifier
-
-    val matched = nameParts.corresponds(qualifierList)(resolver) || {
-      // check if it matches the table portion of the qualifier
-      if (nameParts.length == 1 && qualifierList.nonEmpty) {
-        resolver(nameParts.head, qualifierList.last)
-      } else {
-        false
-      }
+    val qualifierList = if (nameParts.length == attribute.qualifier.length) {
+      attribute.qualifier
+    } else {
+      attribute.qualifier.takeRight(nameParts.length)
     }
-    matched
+    nameParts.corresponds(qualifierList)(resolver)
   }
 
   override def expand(
@@ -414,7 +454,6 @@ case class UnresolvedExtractValue(child: Expression, extraction: Expression)
   override def right: Expression = extraction
 
   override def dataType: DataType = throw new UnresolvedException(this, "dataType")
-  override def foldable: Boolean = throw new UnresolvedException(this, "foldable")
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
 
@@ -484,14 +523,12 @@ case class UnresolvedDeserializer(deserializer: Expression, inputAttributes: Seq
 
   override def child: Expression = deserializer
   override def dataType: DataType = throw new UnresolvedException(this, "dataType")
-  override def foldable: Boolean = throw new UnresolvedException(this, "foldable")
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
 }
 
 case class GetColumnByOrdinal(ordinal: Int, dataType: DataType) extends LeafExpression
   with Unevaluable with NonSQLExpression {
-  override def foldable: Boolean = throw new UnresolvedException(this, "foldable")
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
 }
@@ -509,7 +546,18 @@ case class GetColumnByOrdinal(ordinal: Int, dataType: DataType) extends LeafExpr
 case class UnresolvedOrdinal(ordinal: Int)
     extends LeafExpression with Unevaluable with NonSQLExpression {
   override def dataType: DataType = throw new UnresolvedException(this, "dataType")
-  override def foldable: Boolean = throw new UnresolvedException(this, "foldable")
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
+}
+
+/**
+ * Represents unresolved having clause, the child for it can be Aggregate, GroupingSets, Rollup
+ * and Cube. It is turned by the analyzer into a Filter.
+ */
+case class UnresolvedHaving(
+    havingCondition: Expression,
+    child: LogicalPlan)
+  extends UnaryNode {
+  override lazy val resolved: Boolean = false
+  override def output: Seq[Attribute] = child.output
 }

@@ -17,14 +17,16 @@
 
 package org.apache.spark.sql
 
-import org.apache.spark.sql.catalyst.expressions.CreateNamedStruct
-import org.apache.spark.sql.catalyst.expressions.objects.ExternalMapToCatalyst
+import org.apache.spark.metrics.source.CodegenMetrics
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.sql.catalyst.expressions.{CreateNamedStruct, Expression}
 import org.apache.spark.sql.catalyst.plans.logical.SerializeFromObject
-import org.apache.spark.sql.functions.expr
+import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.sql.types.StructType
 
-class DatasetOptimizationSuite extends QueryTest with SharedSQLContext {
+class DatasetOptimizationSuite extends QueryTest with SharedSparkSession {
   import testImplicits._
 
   test("SPARK-26619: Prune the unused serializers from SerializeFromObject") {
@@ -47,16 +49,12 @@ class DatasetOptimizationSuite extends QueryTest with SharedSQLContext {
       case s: SerializeFromObject => s
     }.head
 
-    serializer.serializer.zip(structFields).foreach { case (serializer, fields) =>
-      val structs = serializer.collect {
-        case c: CreateNamedStruct => Seq(c)
-        case m: ExternalMapToCatalyst =>
-          m.keyConverter.collect {
-            case c: CreateNamedStruct => c
-          } ++ m.valueConverter.collect {
-            case c: CreateNamedStruct => c
-          }
-      }.flatten
+    def collectNamedStruct: PartialFunction[Expression, Seq[CreateNamedStruct]] = {
+      case c: CreateNamedStruct => Seq(c)
+    }
+
+    serializer.serializer.zip(structFields).foreach { case (ser, fields) =>
+      val structs: Seq[CreateNamedStruct] = ser.collect(collectNamedStruct).flatten
       assert(structs.size == fields.size)
       structs.zip(fields).foreach { case (struct, fieldNames) =>
         assert(struct.names.map(_.toString) == fieldNames)
@@ -141,5 +139,69 @@ class DatasetOptimizationSuite extends QueryTest with SharedSQLContext {
       testSerializer(df1, Seq(Seq("_1")))
       checkAnswer(df1, Seq(Row("1"), Row("2"), Row("3")))
     }
+  }
+
+  test("Pruned nested serializers: map of map value") {
+    withSQLConf(SQLConf.SERIALIZER_NESTED_SCHEMA_PRUNING_ENABLED.key -> "true") {
+      val mapData = Seq(
+        (Map(("k", Map(("k2", ("a_1", 11))))), 1),
+        (Map(("k", Map(("k2", ("b_1", 22))))), 2),
+        (Map(("k", Map(("k2", ("c_1", 33))))), 3))
+      val mapDs = mapData.toDS().map(t => (t._1, t._2 + 1))
+      val df = mapDs.select("_1.k.k2._1")
+      testSerializer(df, Seq(Seq("_1")))
+    }
+  }
+
+  test("Pruned nested serializers: map of map key") {
+    withSQLConf(SQLConf.SERIALIZER_NESTED_SCHEMA_PRUNING_ENABLED.key -> "true") {
+      val mapData = Seq(
+        (Map((Map((("1", 1), "val1")), "a_1")), 1),
+        (Map((Map((("2", 2), "val2")), "b_1")), 2),
+        (Map((Map((("3", 3), "val3")), "c_1")), 3))
+      val mapDs = mapData.toDS().map(t => (t._1, t._2 + 1))
+      val df = mapDs.select(expr("map_keys(map_keys(_1)[0])._1[0]"))
+      testSerializer(df, Seq(Seq("_1")))
+      checkAnswer(df, Seq(Row("1"), Row("2"), Row("3")))
+    }
+  }
+
+  test("SPARK-27871: Dataset encoder should benefit from codegen cache") {
+    def checkCodegenCache(createDataset: () => Dataset[_]): Unit = {
+      def getCodegenCount(): Long = CodegenMetrics.METRIC_COMPILATION_TIME.getCount()
+
+      val count1 = getCodegenCount()
+      // trigger codegen for Dataset
+      createDataset().collect()
+      val count2 = getCodegenCount()
+      // codegen happens
+      assert(count2 > count1)
+
+      // trigger codegen for another Dataset of same type
+      createDataset().collect()
+      // codegen cache should work for Datasets of same type.
+      val count3 = getCodegenCount()
+      assert(count3 == count2)
+    }
+
+    withClue("array type") {
+      checkCodegenCache(() => Seq(Seq("abc")).toDS())
+    }
+
+    withClue("map type") {
+      checkCodegenCache(() => Seq(Map("abc" -> 1)).toDS())
+    }
+
+    withClue("array of map") {
+      checkCodegenCache(() => Seq(Seq(Map("abc" -> 1))).toDS())
+    }
+  }
+
+  test("SPARK-32652: Pruned nested serializers: RowEncoder") {
+    val df = Seq(("a", 1), ("b", 2), ("c", 3)).toDF("i", "j")
+    val encoder = RowEncoder(new StructType().add("s", df.schema))
+    val query = df.map(row => Row(row))(encoder).select("s.i")
+    testSerializer(query, Seq(Seq("i")))
+    checkAnswer(query, Seq(Row("a"), Row("b"), Row("c")))
   }
 }

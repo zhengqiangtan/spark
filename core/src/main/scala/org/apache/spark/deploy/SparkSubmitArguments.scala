@@ -19,10 +19,8 @@ package org.apache.spark.deploy
 
 import java.io.{ByteArrayOutputStream, File, PrintStream}
 import java.lang.reflect.InvocationTargetException
-import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.{List => JList}
-import java.util.jar.JarFile
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, HashMap}
@@ -139,10 +137,10 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
    * Remove keys that don't start with "spark." from `sparkProperties`.
    */
   private def ignoreNonSparkProperties(): Unit = {
-    sparkProperties.foreach { case (k, v) =>
+    sparkProperties.keys.foreach { k =>
       if (!k.startsWith("spark.")) {
         sparkProperties -= k
-        logWarning(s"Ignoring non-spark config property: $k=$v")
+        logWarning(s"Ignoring non-Spark config property: $k")
       }
     }
   }
@@ -185,6 +183,7 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
     name = Option(name).orElse(sparkProperties.get("spark.app.name")).orNull
     jars = Option(jars).orElse(sparkProperties.get(config.JARS.key)).orNull
     files = Option(files).orElse(sparkProperties.get(config.FILES.key)).orNull
+    archives = Option(archives).orElse(sparkProperties.get(config.ARCHIVES.key)).orNull
     pyFiles = Option(pyFiles).orElse(sparkProperties.get(config.SUBMIT_PYTHON_FILES.key)).orNull
     ivyRepoPath = sparkProperties.get("spark.jars.ivy").orNull
     ivySettingsPath = sparkProperties.get("spark.jars.ivySettings")
@@ -210,29 +209,6 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
       .orNull
     dynamicAllocationEnabled =
       sparkProperties.get(DYN_ALLOCATION_ENABLED.key).exists("true".equalsIgnoreCase)
-
-    // Try to set main class from JAR if no --class argument is given
-    if (mainClass == null && !isPython && !isR && primaryResource != null) {
-      val uri = new URI(primaryResource)
-      val uriScheme = uri.getScheme()
-
-      uriScheme match {
-        case "file" =>
-          try {
-            Utils.tryWithResource(new JarFile(uri.getPath)) { jar =>
-              // Note that this might still return null if no main-class is set; we catch that later
-              mainClass = jar.getManifest.getMainAttributes.getValue("Main-Class")
-            }
-          } catch {
-            case _: Exception =>
-              error(s"Cannot load main class from JAR $primaryResource")
-          }
-        case _ =>
-          error(
-            s"Cannot load main class from JAR $primaryResource with URI $uriScheme. " +
-            "Please specify a class through --class.")
-      }
-    }
 
     // Global defaults. These should be keep to minimum to avoid confusing behavior.
     master = Option(master).getOrElse("local[*]")
@@ -268,9 +244,6 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
     }
     if (primaryResource == null) {
       error("Must specify a primary resource (JAR or Python or R file)")
-    }
-    if (mainClass == null && SparkSubmit.isUserJar(primaryResource)) {
-      error("No main class set in JAR; please specify one with --class")
     }
     if (driverMemory != null
         && Try(JavaUtils.byteStringAsBytes(driverMemory)).getOrElse(-1L) <= 0) {
@@ -540,8 +513,10 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
         |  --files FILES               Comma-separated list of files to be placed in the working
         |                              directory of each executor. File paths of these files
         |                              in executors can be accessed via SparkFiles.get(fileName).
+        |  --archives ARCHIVES         Comma-separated list of archives to be extracted into the
+        |                              working directory of each executor.
         |
-        |  --conf PROP=VALUE           Arbitrary Spark configuration property.
+        |  --conf, -c PROP=VALUE       Arbitrary Spark configuration property.
         |  --properties-file FILE      Path to a file from which to load extra properties. If not
         |                              specified, this will look for conf/spark-defaults.conf.
         |
@@ -590,8 +565,6 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
         |
         | Spark on YARN only:
         |  --queue QUEUE_NAME          The YARN queue to submit to (Default: "default").
-        |  --archives ARCHIVES         Comma separated list of archives to be extracted into the
-        |                              working directory of each executor.
       """.stripMargin
     )
 

@@ -19,7 +19,6 @@ package org.apache.spark.sql.execution.benchmark
 
 import org.apache.spark.SparkConf
 import org.apache.spark.benchmark.Benchmark
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
 import org.apache.spark.sql.catalyst.plans.logical.SubqueryAlias
@@ -29,11 +28,20 @@ import org.apache.spark.sql.execution.datasources.LogicalRelation
 /**
  * Benchmark to measure TPCDS query performance.
  * To run this:
- *  spark-submit --class <this class> <spark sql test jar> --data-location <TPCDS data location>
+ * {{{
+ *   1. without sbt:
+ *        bin/spark-submit --jars <spark core test jar>,<spark catalyst test jar>
+ *          --class <this class> <spark sql test jar> --data-location <location>
+ *   2. build/sbt "sql/test:runMain <this class> --data-location <TPCDS data location>"
+ *   3. generate result: SPARK_GENERATE_BENCHMARK_FILES=1 build/sbt
+ *        "sql/test:runMain <this class> --data-location <location>"
+ *      Results will be written to "benchmarks/TPCDSQueryBenchmark-results.txt".
+ * }}}
  */
-object TPCDSQueryBenchmark extends Logging {
-  val conf =
-    new SparkConf()
+object TPCDSQueryBenchmark extends SqlBasedBenchmark {
+
+  override def getSparkSession: SparkSession = {
+    val conf = new SparkConf()
       .setMaster("local[1]")
       .setAppName("test-sql-context")
       .set("spark.sql.parquet.compression.codec", "snappy")
@@ -43,7 +51,8 @@ object TPCDSQueryBenchmark extends Logging {
       .set("spark.sql.autoBroadcastJoinThreshold", (20 * 1024 * 1024).toString)
       .set("spark.sql.crossJoin.enabled", "true")
 
-  val spark = SparkSession.builder.config(conf).getOrCreate()
+    SparkSession.builder.config(conf).getOrCreate()
+  }
 
   val tables = Seq("catalog_page", "catalog_returns", "customer", "customer_address",
     "customer_demographics", "date_dim", "household_demographics", "inventory", "item",
@@ -72,36 +81,39 @@ object TPCDSQueryBenchmark extends Logging {
       val queryRelations = scala.collection.mutable.HashSet[String]()
       spark.sql(queryString).queryExecution.analyzed.foreach {
         case SubqueryAlias(alias, _: LogicalRelation) =>
-          queryRelations.add(alias.identifier)
+          queryRelations.add(alias.name)
         case LogicalRelation(_, _, Some(catalogTable), _) =>
           queryRelations.add(catalogTable.identifier.table)
-        case HiveTableRelation(tableMeta, _, _) =>
+        case HiveTableRelation(tableMeta, _, _, _, _) =>
           queryRelations.add(tableMeta.identifier.table)
         case _ =>
       }
       val numRows = queryRelations.map(tableSizes.getOrElse(_, 0L)).sum
-      val benchmark = new Benchmark(s"TPCDS Snappy", numRows, 5)
+      val benchmark = new Benchmark(s"TPCDS Snappy", numRows, 2, output = output)
       benchmark.addCase(s"$name$nameSuffix") { _ =>
-        spark.sql(queryString).collect()
+        spark.sql(queryString).noop()
       }
-      logInfo(s"\n\n===== TPCDS QUERY BENCHMARK OUTPUT FOR $name =====\n")
       benchmark.run()
-      logInfo(s"\n\n===== FINISHED $name =====\n")
     }
   }
 
-  def filterQueries(
+  private def filterQueries(
       origQueries: Seq[String],
-      args: TPCDSQueryBenchmarkArguments): Seq[String] = {
-    if (args.queryFilter.nonEmpty) {
-      origQueries.filter(args.queryFilter.contains)
+      queryFilter: Set[String],
+      nameSuffix: String = ""): Seq[String] = {
+    if (queryFilter.nonEmpty) {
+      if (nameSuffix.nonEmpty) {
+        origQueries.filter { name => queryFilter.contains(s"$name$nameSuffix") }
+      } else {
+        origQueries.filter(queryFilter.contains)
+      }
     } else {
       origQueries
     }
   }
 
-  def main(args: Array[String]): Unit = {
-    val benchmarkArgs = new TPCDSQueryBenchmarkArguments(args)
+  override def runBenchmarkSuite(mainArgs: Array[String]): Unit = {
+    val benchmarkArgs = new TPCDSQueryBenchmarkArguments(mainArgs)
 
     // List of all TPC-DS v1.4 queries
     val tpcdsQueries = Seq(
@@ -117,6 +129,7 @@ object TPCDSQueryBenchmark extends Logging {
       "q91", "q92", "q93", "q94", "q95", "q96", "q97", "q98", "q99")
 
     // This list only includes TPC-DS v2.7 queries that are different from v1.4 ones
+    val nameSuffixForQueriesV2_7 = "-v2.7"
     val tpcdsQueriesV2_7 = Seq(
       "q5a", "q6", "q10a", "q11", "q12", "q14", "q14a", "q18a",
       "q20", "q22", "q22a", "q24", "q27a", "q34", "q35", "q35a", "q36a", "q47", "q49",
@@ -124,8 +137,9 @@ object TPCDSQueryBenchmark extends Logging {
       "q80a", "q86a", "q98")
 
     // If `--query-filter` defined, filters the queries that this option selects
-    val queriesV1_4ToRun = filterQueries(tpcdsQueries, benchmarkArgs)
-    val queriesV2_7ToRun = filterQueries(tpcdsQueriesV2_7, benchmarkArgs)
+    val queriesV1_4ToRun = filterQueries(tpcdsQueries, benchmarkArgs.queryFilter)
+    val queriesV2_7ToRun = filterQueries(tpcdsQueriesV2_7, benchmarkArgs.queryFilter,
+      nameSuffix = nameSuffixForQueriesV2_7)
 
     if ((queriesV1_4ToRun ++ queriesV2_7ToRun).isEmpty) {
       throw new RuntimeException(
@@ -135,6 +149,6 @@ object TPCDSQueryBenchmark extends Logging {
     val tableSizes = setupTables(benchmarkArgs.dataLocation)
     runTpcdsQueries(queryLocation = "tpcds", queries = queriesV1_4ToRun, tableSizes)
     runTpcdsQueries(queryLocation = "tpcds-v2.7.0", queries = queriesV2_7ToRun, tableSizes,
-      nameSuffix = "-v2.7")
+      nameSuffix = nameSuffixForQueriesV2_7)
   }
 }

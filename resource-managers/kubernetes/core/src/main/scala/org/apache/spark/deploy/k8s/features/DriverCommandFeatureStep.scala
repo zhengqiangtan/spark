@@ -24,9 +24,7 @@ import org.apache.spark.deploy.k8s._
 import org.apache.spark.deploy.k8s.Config._
 import org.apache.spark.deploy.k8s.Constants._
 import org.apache.spark.deploy.k8s.submit._
-import org.apache.spark.internal.config._
 import org.apache.spark.launcher.SparkLauncher
-import org.apache.spark.util.Utils
 
 /**
  * Creates the driver command for running the user app, and propagates needed configuration so
@@ -64,7 +62,11 @@ private[spark] class DriverCommandFeatureStep(conf: KubernetesDriverConf)
   }
 
   private def configureForJava(pod: SparkPod, res: String): SparkPod = {
-    val driverContainer = baseDriverContainer(pod, res).build()
+    // re-write primary resource, app jar is also added to spark.jars by default in SparkSubmit
+    // no uploading takes place here
+    val newResName = KubernetesUtils
+      .renameMainAppResource(resource = res, shouldUploadLocal = false)
+    val driverContainer = baseDriverContainer(pod, newResName).build()
     SparkPod(pod.pod, driverContainer)
   }
 
@@ -75,7 +77,10 @@ private[spark] class DriverCommandFeatureStep(conf: KubernetesDriverConf)
           .withValue(conf.get(PYSPARK_MAJOR_PYTHON_VERSION))
         .build())
 
-    val pythonContainer = baseDriverContainer(pod, res)
+    // re-write primary resource to be the remote one and upload the related file
+    val newResName = KubernetesUtils
+      .renameMainAppResource(res, Option(conf.sparkConf), true)
+    val pythonContainer = baseDriverContainer(pod, newResName)
       .addAllToEnv(pythonEnvs.asJava)
       .build()
 
@@ -88,11 +93,23 @@ private[spark] class DriverCommandFeatureStep(conf: KubernetesDriverConf)
   }
 
   private def baseDriverContainer(pod: SparkPod, resource: String): ContainerBuilder = {
+    // re-write primary resource, app jar is also added to spark.jars by default in SparkSubmit
+    val resolvedResource = if (conf.mainAppResource.isInstanceOf[JavaMainAppResource]) {
+      KubernetesUtils.renameMainAppResource(resource, Option(conf.sparkConf), false)
+    } else {
+      resource
+    }
+    var proxyUserArgs = Seq[String]()
+    if (!conf.proxyUser.isEmpty) {
+      proxyUserArgs = proxyUserArgs :+ "--proxy-user"
+      proxyUserArgs = proxyUserArgs :+ conf.proxyUser.get
+    }
     new ContainerBuilder(pod.container)
       .addToArgs("driver")
+      .addToArgs(proxyUserArgs: _*)
       .addToArgs("--properties-file", SPARK_CONF_PATH)
       .addToArgs("--class", conf.mainClass)
-      .addToArgs(resource)
+      .addToArgs(resolvedResource)
       .addToArgs(conf.appArgs: _*)
   }
 }

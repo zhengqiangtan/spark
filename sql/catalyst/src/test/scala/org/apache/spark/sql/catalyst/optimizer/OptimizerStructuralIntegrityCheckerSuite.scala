@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
-import org.apache.spark.sql.catalyst.analysis.{EmptyFunctionRegistry, UnresolvedAttribute}
+import org.apache.spark.sql.catalyst.analysis.{EmptyFunctionRegistry, FakeV2SessionCatalog, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.catalog.{InMemoryCatalog, SessionCatalog}
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.dsl.plans._
@@ -26,7 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Literal, NamedExpressio
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LocalRelation, LogicalPlan, OneRowRelation, Project}
 import org.apache.spark.sql.catalyst.rules._
-import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.connector.catalog.CatalogManager
 
 
 class OptimizerStructuralIntegrityCheckerSuite extends PlanTest {
@@ -43,10 +43,9 @@ class OptimizerStructuralIntegrityCheckerSuite extends PlanTest {
   }
 
   object Optimize extends Optimizer(
-    new SessionCatalog(
-      new InMemoryCatalog,
-      EmptyFunctionRegistry,
-      new SQLConf())) {
+    new CatalogManager(
+      FakeV2SessionCatalog,
+      new SessionCatalog(new InMemoryCatalog, EmptyFunctionRegistry))) {
     val newBatch = Batch("OptimizeRuleBreakSI", Once, OptimizeRuleBreakSI)
     override def defaultBatches: Seq[Batch] = Seq(newBatch) ++ super.defaultBatches
   }

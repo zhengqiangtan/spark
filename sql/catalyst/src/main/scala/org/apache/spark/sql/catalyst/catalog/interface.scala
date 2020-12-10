@@ -24,17 +24,22 @@ import java.util.Date
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
+import org.apache.commons.lang3.StringUtils
+import org.json4s.JsonAST.{JArray, JString}
+import org.json4s.jackson.JsonMethods._
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.catalyst.{FunctionIdentifier, InternalRow, TableIdentifier}
+import org.apache.spark.sql.catalyst.{FunctionIdentifier, InternalRow, SQLConfHelper, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.MultiInstanceRelation
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeMap, AttributeReference, Cast, ExprId, Literal}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.EstimationUtils
-import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateFormatter, DateTimeUtils, TimestampFormatter}
-import org.apache.spark.sql.catalyst.util.quoteIdentifier
+import org.apache.spark.sql.catalyst.util._
+import org.apache.spark.sql.connector.catalog.CatalogManager
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 
 /**
@@ -74,7 +79,7 @@ case class CatalogStorageFormat(
     inputFormat.foreach(map.put("InputFormat", _))
     outputFormat.foreach(map.put("OutputFormat", _))
     if (compressed) map.put("Compressed", "")
-    CatalogUtils.maskCredentials(properties) match {
+    SQLConf.get.redactOptions(properties) match {
       case props if props.isEmpty => // No-op
       case props =>
         map.put("Storage Properties", props.map(p => p._1 + "=" + p._2).mkString("[", ", ", "]"))
@@ -117,7 +122,7 @@ case class CatalogTablePartition(
     }
     map.put("Created Time", new Date(createTime).toString)
     val lastAccess = {
-      if (-1 == lastAccessTime) "UNKNOWN" else new Date(lastAccessTime).toString
+      if (lastAccessTime <= 0) "UNKNOWN" else new Date(lastAccessTime).toString
     }
     map.put("Last Access", lastAccess)
     stats.foreach(s => map.put("Partition Statistics", s.simpleString))
@@ -174,8 +179,7 @@ case class CatalogTablePartition(
 case class BucketSpec(
     numBuckets: Int,
     bucketColumnNames: Seq[String],
-    sortColumnNames: Seq[String]) {
-  def conf: SQLConf = SQLConf.get
+    sortColumnNames: Seq[String]) extends SQLConfHelper {
 
   if (numBuckets <= 0 || numBuckets > conf.bucketingMaxBuckets) {
     throw new AnalysisException(
@@ -282,10 +286,42 @@ case class CatalogTable(
   def qualifiedName: String = identifier.unquotedString
 
   /**
-   * Return the default database name we use to resolve a view, should be None if the CatalogTable
-   * is not a View or created by older versions of Spark(before 2.2.0).
+   * Return the current catalog and namespace (concatenated as a Seq[String]) of when the view was
+   * created.
    */
-  def viewDefaultDatabase: Option[String] = properties.get(VIEW_DEFAULT_DATABASE)
+  def viewCatalogAndNamespace: Seq[String] = {
+    if (properties.contains(VIEW_CATALOG_AND_NAMESPACE)) {
+      val numParts = properties(VIEW_CATALOG_AND_NAMESPACE).toInt
+      (0 until numParts).map { index =>
+        properties.getOrElse(
+          s"$VIEW_CATALOG_AND_NAMESPACE_PART_PREFIX$index",
+          throw new AnalysisException("Corrupted table name context in catalog: " +
+            s"$numParts parts expected, but part $index is missing.")
+        )
+      }
+    } else if (properties.contains(VIEW_DEFAULT_DATABASE)) {
+      // Views created before Spark 3.0 can only access tables in the session catalog.
+      Seq(CatalogManager.SESSION_CATALOG_NAME, properties(VIEW_DEFAULT_DATABASE))
+    } else {
+      Nil
+    }
+  }
+
+  /**
+   * Return the SQL configs of when the view was created, the configs are applied when parsing and
+   * analyzing the view, should be empty if the CatalogTable is not a View or created by older
+   * versions of Spark(before 3.1.0).
+   */
+  def viewSQLConfigs: Map[String, String] = {
+    try {
+      for ((key, value) <- properties if key.startsWith(CatalogTable.VIEW_SQL_CONFIG_PREFIX))
+        yield (key.substring(CatalogTable.VIEW_SQL_CONFIG_PREFIX.length), value)
+    } catch {
+      case e: Exception =>
+        throw new AnalysisException(
+          "Corrupted view SQL configs in catalog", cause = Some(e))
+    }
+  }
 
   /**
    * Return the output column names of the query that creates a view, the column names are used to
@@ -301,6 +337,40 @@ case class CatalogTable(
       throw new AnalysisException("Corrupted view query output column names in catalog: " +
         s"$numCols parts expected, but part $index is missing.")
     )
+  }
+
+  /**
+   * Return temporary view names the current view was referred. should be empty if the
+   * CatalogTable is not a Temporary View or created by older versions of Spark(before 3.1.0).
+   */
+  def viewReferredTempViewNames: Seq[Seq[String]] = {
+    try {
+      properties.get(VIEW_REFERRED_TEMP_VIEW_NAMES).map { json =>
+        parse(json).asInstanceOf[JArray].arr.map { namePartsJson =>
+          namePartsJson.asInstanceOf[JArray].arr.map(_.asInstanceOf[JString].s)
+        }
+      }.getOrElse(Seq.empty)
+    } catch {
+      case e: Exception =>
+        throw new AnalysisException(
+          "corrupted view referred temp view names in catalog", cause = Some(e))
+    }
+  }
+
+  /**
+   * Return temporary function names the current view was referred. should be empty if the
+   * CatalogTable is not a Temporary View or created by older versions of Spark(before 3.1.0).
+   */
+  def viewReferredTempFunctionNames: Seq[String] = {
+    try {
+      properties.get(VIEW_REFERRED_TEMP_FUNCTION_NAMES).map { json =>
+        parse(json).asInstanceOf[JArray].arr.map(_.asInstanceOf[JString].s)
+      }.getOrElse(Seq.empty)
+    } catch {
+      case e: Exception =>
+        throw new AnalysisException(
+          "corrupted view referred temp functions names in catalog", cause = Some(e))
+    }
   }
 
   /** Syntactic sugar to update a field in `storage`. */
@@ -320,12 +390,15 @@ case class CatalogTable(
     val map = new mutable.LinkedHashMap[String, String]()
     val tableProperties = properties.map(p => p._1 + "=" + p._2).mkString("[", ", ", "]")
     val partitionColumns = partitionColumnNames.map(quoteIdentifier).mkString("[", ", ", "]")
+    val lastAccess = {
+      if (lastAccessTime <= 0) "UNKNOWN" else new Date(lastAccessTime).toString
+    }
 
     identifier.database.foreach(map.put("Database", _))
     map.put("Table", identifier.table)
     if (owner != null && owner.nonEmpty) map.put("Owner", owner)
     map.put("Created Time", new Date(createTime).toString)
-    map.put("Last Access", new Date(lastAccessTime).toString)
+    map.put("Last Access", lastAccess)
     map.put("Created By", "Spark " + createVersion)
     map.put("Type", tableType.name)
     provider.foreach(map.put("Provider", _))
@@ -334,7 +407,10 @@ case class CatalogTable(
     if (tableType == CatalogTableType.VIEW) {
       viewText.foreach(map.put("View Text", _))
       viewOriginalText.foreach(map.put("View Original Text", _))
-      viewDefaultDatabase.foreach(map.put("View Default Database", _))
+      if (viewCatalogAndNamespace.nonEmpty) {
+        import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
+        map.put("View Catalog and Namespace", viewCatalogAndNamespace.quoted)
+      }
       if (viewQueryColumnNames.nonEmpty) {
         map.put("View Query Output Columns", viewQueryColumnNames.mkString("[", ", ", "]"))
       }
@@ -365,16 +441,42 @@ case class CatalogTable(
 }
 
 object CatalogTable {
-  val VIEW_DEFAULT_DATABASE = "view.default.database"
-  val VIEW_QUERY_OUTPUT_PREFIX = "view.query.out."
+  val VIEW_PREFIX = "view."
+  // Starting from Spark 3.0, we don't use this property any more. `VIEW_CATALOG_AND_NAMESPACE` is
+  // used instead.
+  val VIEW_DEFAULT_DATABASE = VIEW_PREFIX + "default.database"
+
+  val VIEW_CATALOG_AND_NAMESPACE = VIEW_PREFIX + "catalogAndNamespace.numParts"
+  val VIEW_CATALOG_AND_NAMESPACE_PART_PREFIX = VIEW_PREFIX + "catalogAndNamespace.part."
+  // Convert the current catalog and namespace to properties.
+  def catalogAndNamespaceToProps(
+      currentCatalog: String,
+      currentNamespace: Seq[String]): Map[String, String] = {
+    val props = new mutable.HashMap[String, String]
+    val parts = currentCatalog +: currentNamespace
+    if (parts.nonEmpty) {
+      props.put(VIEW_CATALOG_AND_NAMESPACE, parts.length.toString)
+      parts.zipWithIndex.foreach { case (name, index) =>
+        props.put(s"$VIEW_CATALOG_AND_NAMESPACE_PART_PREFIX$index", name)
+      }
+    }
+    props.toMap
+  }
+
+  val VIEW_SQL_CONFIG_PREFIX = VIEW_PREFIX + "sqlConfig."
+
+  val VIEW_QUERY_OUTPUT_PREFIX = VIEW_PREFIX + "query.out."
   val VIEW_QUERY_OUTPUT_NUM_COLUMNS = VIEW_QUERY_OUTPUT_PREFIX + "numCols"
   val VIEW_QUERY_OUTPUT_COLUMN_NAME_PREFIX = VIEW_QUERY_OUTPUT_PREFIX + "col."
+
+  val VIEW_REFERRED_TEMP_VIEW_NAMES = VIEW_PREFIX + "referredTempViewNames"
+  val VIEW_REFERRED_TEMP_FUNCTION_NAMES = VIEW_PREFIX + "referredTempFunctionsNames"
 }
 
 /**
  * This class of statistics is used in [[CatalogTable]] to interact with metastore.
  * We define this new class instead of directly using [[Statistics]] here because there are no
- * concepts of attributes or broadcast hint in catalog.
+ * concepts of attributes in catalog.
  */
 case class CatalogStatistics(
     sizeInBytes: BigInt,
@@ -385,16 +487,16 @@ case class CatalogStatistics(
    * Convert [[CatalogStatistics]] to [[Statistics]], and match column stats to attributes based
    * on column names.
    */
-  def toPlanStats(planOutput: Seq[Attribute], cboEnabled: Boolean): Statistics = {
-    if (cboEnabled && rowCount.isDefined) {
+  def toPlanStats(planOutput: Seq[Attribute], planStatsEnabled: Boolean): Statistics = {
+    if (planStatsEnabled && rowCount.isDefined) {
       val attrStats = AttributeMap(planOutput
         .flatMap(a => colStats.get(a.name).map(a -> _.toPlanStat(a.name, a.dataType))))
       // Estimate size as number of rows * row size.
       val size = EstimationUtils.getOutputSize(planOutput, rowCount.get, attrStats)
       Statistics(sizeInBytes = size, rowCount = rowCount, attributeStats = attrStats)
     } else {
-      // When CBO is disabled or the table doesn't have other statistics, we apply the size-only
-      // estimation strategy and only propagate sizeInBytes in statistics.
+      // When plan statistics are disabled or the table doesn't have other statistics,
+      // we apply the size-only estimation strategy and only propagate sizeInBytes in statistics.
       Statistics(sizeInBytes = sizeInBytes)
     }
   }
@@ -477,8 +579,11 @@ object CatalogColumnStat extends Logging {
 
   val VERSION = 2
 
-  private def getTimestampFormatter(): TimestampFormatter = {
-    TimestampFormatter(format = "yyyy-MM-dd HH:mm:ss.SSSSSS", zoneId = ZoneOffset.UTC)
+  private def getTimestampFormatter(isParsing: Boolean): TimestampFormatter = {
+    TimestampFormatter(
+      format = "yyyy-MM-dd HH:mm:ss.SSSSSS",
+      zoneId = ZoneOffset.UTC,
+      isParsing = isParsing)
   }
 
   /**
@@ -488,10 +593,10 @@ object CatalogColumnStat extends Logging {
     dataType match {
       case BooleanType => s.toBoolean
       case DateType if version == 1 => DateTimeUtils.fromJavaDate(java.sql.Date.valueOf(s))
-      case DateType => DateFormatter().parse(s)
+      case DateType => DateFormatter(ZoneOffset.UTC).parse(s)
       case TimestampType if version == 1 =>
         DateTimeUtils.fromJavaTimestamp(java.sql.Timestamp.valueOf(s))
-      case TimestampType => getTimestampFormatter().parse(s)
+      case TimestampType => getTimestampFormatter(isParsing = true).parse(s)
       case ByteType => s.toByte
       case ShortType => s.toShort
       case IntegerType => s.toInt
@@ -513,8 +618,8 @@ object CatalogColumnStat extends Logging {
    */
   def toExternalString(v: Any, colName: String, dataType: DataType): String = {
     val externalValue = dataType match {
-      case DateType => DateFormatter().format(v.asInstanceOf[Int])
-      case TimestampType => getTimestampFormatter().format(v.asInstanceOf[Long])
+      case DateType => DateFormatter(ZoneOffset.UTC).format(v.asInstanceOf[Int])
+      case TimestampType => getTimestampFormatter(isParsing = false).format(v.asInstanceOf[Long])
       case BooleanType | _: IntegralType | FloatType | DoubleType => v
       case _: DecimalType => v.asInstanceOf[Decimal].toJavaBigDecimal
       // This version of Spark does not use min/max for binary/string types so we ignore it.
@@ -561,6 +666,8 @@ object CatalogTableType {
   val EXTERNAL = new CatalogTableType("EXTERNAL")
   val MANAGED = new CatalogTableType("MANAGED")
   val VIEW = new CatalogTableType("VIEW")
+
+  val tableTypes = Seq(EXTERNAL, MANAGED, VIEW)
 }
 
 
@@ -590,8 +697,20 @@ object CatalogTypes {
  * A placeholder for a table relation, which will be replaced by concrete relation like
  * `LogicalRelation` or `HiveTableRelation`, during analysis.
  */
-case class UnresolvedCatalogRelation(tableMeta: CatalogTable) extends LeafNode {
+case class UnresolvedCatalogRelation(
+    tableMeta: CatalogTable,
+    options: CaseInsensitiveStringMap = CaseInsensitiveStringMap.empty(),
+    override val isStreaming: Boolean = false) extends LeafNode {
   assert(tableMeta.identifier.database.isDefined)
+  override lazy val resolved: Boolean = false
+  override def output: Seq[Attribute] = Nil
+}
+
+/**
+ * A wrapper to store the temporary view info, will be kept in `SessionCatalog`
+ * and will be transformed to `View` during analysis
+ */
+case class TemporaryViewRelation(tableMeta: CatalogTable) extends LeafNode {
   override lazy val resolved: Boolean = false
   override def output: Seq[Attribute] = Nil
 }
@@ -604,7 +723,10 @@ case class UnresolvedCatalogRelation(tableMeta: CatalogTable) extends LeafNode {
 case class HiveTableRelation(
     tableMeta: CatalogTable,
     dataCols: Seq[AttributeReference],
-    partitionCols: Seq[AttributeReference]) extends LeafNode with MultiInstanceRelation {
+    partitionCols: Seq[AttributeReference],
+    tableStats: Option[Statistics] = None,
+    @transient prunedPartitions: Option[Seq[CatalogTablePartition]] = None)
+  extends LeafNode with MultiInstanceRelation {
   assert(tableMeta.identifier.database.isDefined)
   assert(tableMeta.partitionSchema.sameType(partitionCols.toStructType))
   assert(tableMeta.dataSchema.sameType(dataCols.toStructType))
@@ -628,7 +750,9 @@ case class HiveTableRelation(
   )
 
   override def computeStats(): Statistics = {
-    tableMeta.stats.map(_.toPlanStats(output, conf.cboEnabled)).getOrElse {
+    tableMeta.stats.map(_.toPlanStats(output, conf.cboEnabled || conf.planStatsEnabled))
+      .orElse(tableStats)
+      .getOrElse {
       throw new IllegalStateException("table stats must be specified.")
     }
   }
@@ -636,4 +760,40 @@ case class HiveTableRelation(
   override def newInstance(): HiveTableRelation = copy(
     dataCols = dataCols.map(_.newInstance()),
     partitionCols = partitionCols.map(_.newInstance()))
+
+  override def simpleString(maxFields: Int): String = {
+    val catalogTable = tableMeta.storage.serde match {
+      case Some(serde) => tableMeta.identifier :: serde :: Nil
+      case _ => tableMeta.identifier :: Nil
+    }
+
+    var metadata = Map(
+      "CatalogTable" -> catalogTable.mkString(", "),
+      "Data Cols" -> truncatedString(dataCols, "[", ", ", "]", maxFields),
+      "Partition Cols" -> truncatedString(partitionCols, "[", ", ", "]", maxFields)
+    )
+
+    if (prunedPartitions.nonEmpty) {
+      metadata += ("Pruned Partitions" -> {
+        val parts = prunedPartitions.get.map { part =>
+          val spec = part.spec.map { case (k, v) => s"$k=$v" }.mkString(", ")
+          if (part.storage.serde.nonEmpty && part.storage.serde != tableMeta.storage.serde) {
+            s"($spec, ${part.storage.serde.get})"
+          } else {
+            s"($spec)"
+          }
+        }
+        truncatedString(parts, "[", ", ", "]", maxFields)
+      })
+    }
+
+    val metadataEntries = metadata.toSeq.map {
+      case (key, value) if key == "CatalogTable" => value
+      case (key, value) =>
+        key + ": " + StringUtils.abbreviate(value, SQLConf.get.maxMetadataStringLength)
+    }
+
+    val metadataStr = truncatedString(metadataEntries, "[", ", ", "]", maxFields)
+    s"$nodeName $metadataStr"
+  }
 }

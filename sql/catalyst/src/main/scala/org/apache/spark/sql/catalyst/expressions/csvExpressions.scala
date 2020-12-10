@@ -40,9 +40,9 @@ import org.apache.spark.unsafe.types.UTF8String
   examples = """
     Examples:
       > SELECT _FUNC_('1, 0.8', 'a INT, b DOUBLE');
-       {"a":1, "b":0.8}
-      > SELECT _FUNC_('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'))
-       {"time":2015-08-26 00:00:00.0}
+       {"a":1,"b":0.8}
+      > SELECT _FUNC_('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
+       {"time":2015-08-26 00:00:00}
   """,
   since = "3.0.0")
 // scalastyle:on line.size.limit
@@ -114,7 +114,7 @@ case class CsvToStructs(
       StructType(nullableSchema.filterNot(_.name == parsedOptions.columnNameOfCorruptRecord))
     val rawParser = new UnivocityParser(actualSchema, actualSchema, parsedOptions)
     new FailureSafeParser[String](
-      input => Seq(rawParser.parse(input)),
+      input => rawParser.parse(input),
       mode,
       nullableSchema,
       parsedOptions.columnNameOfCorruptRecord)
@@ -144,7 +144,7 @@ case class CsvToStructs(
   examples = """
     Examples:
       > SELECT _FUNC_('1,abc');
-       struct<_c0:int,_c1:string>
+       STRUCT<`_c0`: INT, `_c1`: STRING>
   """,
   since = "3.0.0")
 case class SchemaOfCsv(
@@ -165,10 +165,14 @@ case class SchemaOfCsv(
   @transient
   private lazy val csv = child.eval().asInstanceOf[UTF8String]
 
-  override def checkInputDataTypes(): TypeCheckResult = child match {
-    case Literal(s, StringType) if s != null => super.checkInputDataTypes()
-    case _ => TypeCheckResult.TypeCheckFailure(
-      s"The input csv should be a string literal and not null; however, got ${child.sql}.")
+  override def checkInputDataTypes(): TypeCheckResult = {
+    if (child.foldable && csv != null) {
+      super.checkInputDataTypes()
+    } else {
+      TypeCheckResult.TypeCheckFailure(
+        "The input csv should be a foldable string expression and not null; " +
+        s"however, got ${child.sql}.")
+    }
   }
 
   override def eval(v: InternalRow): Any = {
@@ -182,7 +186,7 @@ case class SchemaOfCsv(
     val inferSchema = new CSVInferSchema(parsedOptions)
     val fieldTypes = inferSchema.inferRowType(startType, row)
     val st = StructType(inferSchema.toStructFields(fieldTypes, header))
-    UTF8String.fromString(st.catalogString)
+    UTF8String.fromString(st.sql)
   }
 
   override def prettyName: String = "schema_of_csv"
@@ -199,7 +203,7 @@ case class SchemaOfCsv(
       > SELECT _FUNC_(named_struct('a', 1, 'b', 2));
        1,2
       > SELECT _FUNC_(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
-       "26/08/2015"
+       26/08/2015
   """,
   since = "3.0.0")
 // scalastyle:on line.size.limit
@@ -207,7 +211,8 @@ case class StructsToCsv(
      options: Map[String, String],
      child: Expression,
      timeZoneId: Option[String] = None)
-  extends UnaryExpression with TimeZoneAwareExpression with CodegenFallback with ExpectsInputTypes {
+  extends UnaryExpression with TimeZoneAwareExpression with CodegenFallback with ExpectsInputTypes
+    with NullIntolerant {
   override def nullable: Boolean = true
 
   def this(options: Map[String, String], child: Expression) = this(options, child, None)

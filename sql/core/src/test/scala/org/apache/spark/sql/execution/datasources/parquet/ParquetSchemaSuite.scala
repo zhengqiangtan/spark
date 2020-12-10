@@ -28,10 +28,10 @@ import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.execution.datasources.SchemaColumnConvertNotSupportedException
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
 
-abstract class ParquetSchemaTest extends ParquetTest with SharedSQLContext {
+abstract class ParquetSchemaTest extends ParquetTest with SharedSparkSession {
 
   /**
    * Checks whether the reflected Parquet message type for product type `T` conforms `messageType`.
@@ -253,6 +253,25 @@ class ParquetSchemaInferenceSuite extends ParquetSchemaTest {
       |  optional group _1 (MAP) {
       |    repeated group map (MAP_KEY_VALUE) {
       |      required int32 key;
+      |      optional binary value (UTF8);
+      |    }
+      |  }
+      |}
+    """.stripMargin,
+    binaryAsString = true,
+    int96AsTimestamp = true,
+    writeLegacyParquetFormat = true)
+
+  testSchemaInference[Tuple1[Map[(String, String), String]]](
+    "map - group type key",
+    """
+      |message root {
+      |  optional group _1 (MAP) {
+      |    repeated group map (MAP_KEY_VALUE) {
+      |      required group key {
+      |        optional binary _1 (UTF8);
+      |        optional binary _2 (UTF8);
+      |      }
       |      optional binary value (UTF8);
       |    }
       |  }

@@ -24,14 +24,13 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
-import scala.language.postfixOps
 
 import com.google.common.io.Files
-import org.apache.commons.lang3.SerializationUtils
 import org.apache.hadoop.yarn.conf.YarnConfiguration
 import org.apache.hadoop.yarn.server.MiniYARNCluster
-import org.scalatest.{BeforeAndAfterAll, Matchers}
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.concurrent.Eventually._
+import org.scalatest.matchers.must.Matchers
 
 import org.apache.spark._
 import org.apache.spark.deploy.yarn.config._
@@ -54,7 +53,7 @@ abstract class BaseYarnClusterSuite
     |log4j.logger.org.apache.hadoop=WARN
     |log4j.logger.org.eclipse.jetty=WARN
     |log4j.logger.org.mortbay=WARN
-    |log4j.logger.org.spark_project.jetty=WARN
+    |log4j.logger.org.sparkproject.jetty=WARN
     """.stripMargin
 
   private var yarnCluster: MiniYARNCluster = _
@@ -65,7 +64,7 @@ abstract class BaseYarnClusterSuite
 
   def newYarnConfig(): YarnConfiguration
 
-  override def beforeAll() {
+  override def beforeAll(): Unit = {
     super.beforeAll()
 
     tempDir = Utils.createTempDir()
@@ -117,7 +116,7 @@ abstract class BaseYarnClusterSuite
     File.createTempFile("token", ".txt", hadoopConfDir)
   }
 
-  override def afterAll() {
+  override def afterAll(): Unit = {
     try {
       yarnCluster.stop()
     } finally {
@@ -169,7 +168,7 @@ abstract class BaseYarnClusterSuite
 
     val handle = launcher.startApplication()
     try {
-      eventually(timeout(2 minutes), interval(1 second)) {
+      eventually(timeout(3.minutes), interval(1.second)) {
         assert(handle.getState().isFinal())
       }
     } finally {
